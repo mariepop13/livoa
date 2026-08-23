@@ -187,4 +187,7 @@ export function createCharacterApplicationService(
   };
 }
 
-export type { CharacterUseCaseError, CharacterUseCaseResult } from "./contracts";
+export type {
+  CharacterUseCaseError,
+  CharacterUseCaseResult,
+} from "./contracts";

@@ -219,13 +219,18 @@ describe("character application service", () => {
       error: {
         kind: "application",
         code: "STORAGE_ERROR",
-        error: { code: "STORAGE_ERROR", message: "Local data could not be read." },
+        error: {
+          code: "STORAGE_ERROR",
+          message: "Local data could not be read.",
+        },
       },
     });
 
     repository.listFailure = null;
     repository.deleteFailure = new Error(secret);
-    await expect(deleteCharacter(repository, characterId)).resolves.toMatchObject({
+    await expect(
+      deleteCharacter(repository, characterId),
+    ).resolves.toMatchObject({
       ok: false,
       error: {
         kind: "application",
