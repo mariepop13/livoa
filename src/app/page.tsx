@@ -1,0 +1,1 @@
+export default function Home() { return <main className="mx-auto max-w-3xl p-10"><h1 className="text-4xl font-semibold">Livoa</h1><p className="mt-4 text-lg">An open-source, local-first platform for creating and interacting with AI characters using the models and providers you choose.</p></main>; }
