@@ -1,0 +1,401 @@
+import { z } from "zod";
+
+import type {
+  AiModel,
+  AiProvider,
+  ChatChunk,
+  ChatRequest,
+  ProviderError,
+} from "@/domain/ports";
+
+const providerErrorDefinitions = {
+  authentication: {
+    message: "The provider rejected the configured credentials.",
+    retryable: false,
+  },
+  network: {
+    message: "The provider could not be reached.",
+    retryable: true,
+  },
+  rate_limit: {
+    message: "The provider rate limit was reached.",
+    retryable: true,
+  },
+  invalid_response: {
+    message: "The provider returned an invalid response.",
+    retryable: false,
+  },
+  unknown: {
+    message: "The provider request failed.",
+    retryable: false,
+  },
+} as const satisfies Record<
+  ProviderError["code"],
+  { readonly message: string; readonly retryable: boolean }
+>;
+
+const httpBaseUrlSchema = z.url().refine(
+  (value) => {
+    const url = new URL(value);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      url.username === "" &&
+      url.password === "" &&
+      url.search === "" &&
+      url.hash === ""
+    );
+  },
+  { message: "Expected an HTTP or HTTPS base URL." },
+);
+
+const providerConfigurationSchema = z.object({
+  id: z.string().trim().min(1),
+  baseUrl: z.string().trim().pipe(httpBaseUrlSchema),
+  credential: z.string().trim().min(1),
+});
+
+const modelListResponseSchema = z.object({
+  data: z.array(
+    z.object({
+      id: z.string().trim().min(1),
+      name: z.string().trim().min(1).optional(),
+    }),
+  ),
+});
+
+const chatRequestSchema = z.object({
+  model: z.string().trim().min(1),
+  messages: z.array(
+    z.object({
+      role: z.enum(["user", "assistant", "system"]),
+      content: z.string(),
+    }),
+  ),
+});
+
+const chatCompletionChunkSchema = z.object({
+  choices: z.array(
+    z.object({
+      delta: z.object({
+        content: z.string().nullable().optional(),
+      }),
+    }),
+  ),
+});
+
+type Fetcher = typeof globalThis.fetch;
+
+export type OpenAiCompatibleProviderOptions = Readonly<{
+  id: string;
+  baseUrl: string;
+  credential: string;
+  fetcher?: Fetcher;
+}>;
+
+export class OpenAiCompatibleProviderError
+  extends Error
+  implements ProviderError
+{
+  public readonly retryable: boolean;
+
+  public constructor(public readonly code: ProviderError["code"]) {
+    const definition = providerErrorDefinitions[code];
+    super(definition.message);
+    this.name = "OpenAiCompatibleProviderError";
+    this.retryable = definition.retryable;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class OpenAiCompatibleProvider implements AiProvider {
+  public readonly id: string;
+
+  readonly #baseUrl: URL;
+  readonly #credential: string;
+  readonly #fetcher: Fetcher;
+
+  public constructor(options: OpenAiCompatibleProviderOptions) {
+    const parsed = providerConfigurationSchema.safeParse(options);
+
+    if (!parsed.success) {
+      throw new OpenAiCompatibleProviderError("unknown");
+    }
+
+    this.id = parsed.data.id;
+    this.#baseUrl = new URL(parsed.data.baseUrl);
+    this.#credential = parsed.data.credential;
+    this.#fetcher = options.fetcher ?? globalThis.fetch;
+  }
+
+  public async listModels(): Promise<AiModel[]> {
+    const response = await this.#request("models", {
+      headers: this.#headers("application/json"),
+      method: "GET",
+    });
+
+    let body: unknown;
+
+    try {
+      body = await response.json();
+    } catch {
+      throw new OpenAiCompatibleProviderError("invalid_response");
+    }
+
+    const parsed = modelListResponseSchema.safeParse(body);
+
+    if (!parsed.success) {
+      throw new OpenAiCompatibleProviderError("invalid_response");
+    }
+
+    return parsed.data.data.map((model) => ({
+      id: model.id,
+      displayName: model.name ?? model.id,
+      providerId: this.id,
+    }));
+  }
+
+  public async *streamChat(
+    request: ChatRequest,
+    signal?: AbortSignal,
+  ): AsyncIterable<ChatChunk> {
+    const parsedRequest = chatRequestSchema.safeParse(request);
+
+    if (!parsedRequest.success) {
+      throw new OpenAiCompatibleProviderError("unknown");
+    }
+
+    signal?.throwIfAborted();
+
+    const response = await this.#request(
+      "chat/completions",
+      {
+        body: JSON.stringify({
+          ...parsedRequest.data,
+          stream: true,
+        }),
+        headers: this.#headers("text/event-stream", true),
+        method: "POST",
+        signal,
+      },
+      signal,
+    );
+
+    if (!isEventStreamResponse(response) || response.body === null) {
+      throw new OpenAiCompatibleProviderError("invalid_response");
+    }
+
+    for await (const data of readServerSentEventData(response.body, signal)) {
+      if (data === "[DONE]") {
+        yield { type: "done" };
+        return;
+      }
+
+      const parsedChunk = parseJsonChunk(data);
+
+      for (const choice of parsedChunk.choices) {
+        if (
+          choice.delta.content !== undefined &&
+          choice.delta.content !== null
+        ) {
+          yield { type: "text", content: choice.delta.content };
+        }
+      }
+    }
+
+    throw new OpenAiCompatibleProviderError("invalid_response");
+  }
+
+  async #request(
+    endpoint: string,
+    init: RequestInit,
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    signal?.throwIfAborted();
+
+    let response: Response;
+
+    try {
+      response = await this.#fetcher(this.#endpoint(endpoint), {
+        ...init,
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+      });
+    } catch (error: unknown) {
+      if (signal?.aborted === true || isAbortError(error)) {
+        throw error;
+      }
+
+      throw new OpenAiCompatibleProviderError("network");
+    }
+
+    if (!response.ok) {
+      throw httpProviderError(response.status);
+    }
+
+    return response;
+  }
+
+  #endpoint(path: string): string {
+    const url = new URL(this.#baseUrl);
+    url.pathname = `${url.pathname.replace(/\/+$/, "")}/${path}`;
+    return url.toString();
+  }
+
+  #headers(accept: string, includeContentType = false): Headers {
+    const headers = new Headers({
+      Accept: accept,
+      Authorization: `Bearer ${this.#credential}`,
+    });
+
+    if (includeContentType) {
+      headers.set("Content-Type", "application/json");
+    }
+
+    return headers;
+  }
+}
+
+function httpProviderError(status: number): OpenAiCompatibleProviderError {
+  if (status === 401 || status === 403) {
+    return new OpenAiCompatibleProviderError("authentication");
+  }
+
+  if (status === 429) {
+    return new OpenAiCompatibleProviderError("rate_limit");
+  }
+
+  if (status === 408 || status >= 500) {
+    return new OpenAiCompatibleProviderError("network");
+  }
+
+  return new OpenAiCompatibleProviderError("unknown");
+}
+
+function isEventStreamResponse(response: Response): boolean {
+  const contentType = response.headers.get("content-type");
+  return contentType?.toLowerCase().startsWith("text/event-stream") === true;
+}
+
+function parseJsonChunk(
+  data: string,
+): z.infer<typeof chatCompletionChunkSchema> {
+  let value: unknown;
+
+  try {
+    value = JSON.parse(data);
+  } catch {
+    throw new OpenAiCompatibleProviderError("invalid_response");
+  }
+
+  const parsed = chatCompletionChunkSchema.safeParse(value);
+
+  if (!parsed.success) {
+    throw new OpenAiCompatibleProviderError("invalid_response");
+  }
+
+  return parsed.data;
+}
+
+async function* readServerSentEventData(
+  body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
+): AsyncIterable<string> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let reachedEnd = false;
+
+  try {
+    while (true) {
+      signal?.throwIfAborted();
+
+      let result: ReadableStreamReadResult<Uint8Array>;
+
+      try {
+        result = await reader.read();
+      } catch (error: unknown) {
+        if (signal?.aborted === true || isAbortError(error)) {
+          throw error;
+        }
+
+        throw new OpenAiCompatibleProviderError("network");
+      }
+
+      if (result.done) {
+        buffer += decoder.decode();
+        reachedEnd = true;
+        break;
+      }
+
+      buffer += decoder.decode(result.value, { stream: true });
+
+      let event = takeNextEvent(buffer);
+      while (event !== undefined) {
+        buffer = event.remaining;
+        const data = eventData(event.value);
+
+        if (data !== undefined) {
+          yield data;
+        }
+
+        event = takeNextEvent(buffer);
+      }
+    }
+
+    if (buffer.trim().length > 0) {
+      const data = eventData(buffer);
+
+      if (data !== undefined) {
+        yield data;
+      }
+    }
+  } finally {
+    if (!reachedEnd) {
+      try {
+        await reader.cancel();
+      } catch {
+        // Stream cleanup must not replace the provider or cancellation error.
+      }
+    }
+
+    reader.releaseLock();
+  }
+}
+
+function takeNextEvent(
+  buffer: string,
+): { readonly value: string; readonly remaining: string } | undefined {
+  const boundary = /\r\n\r\n|\n\n|\r\r/.exec(buffer);
+
+  if (boundary?.index === undefined) {
+    return undefined;
+  }
+
+  return {
+    value: buffer.slice(0, boundary.index),
+    remaining: buffer.slice(boundary.index + boundary[0].length),
+  };
+}
+
+function eventData(event: string): string | undefined {
+  const dataLines = event
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .filter((line) => line === "data" || line.startsWith("data:"))
+    .map((line) => {
+      const value = line === "data" ? "" : line.slice("data:".length);
+      return value.startsWith(" ") ? value.slice(1) : value;
+    });
+
+  return dataLines.length === 0 ? undefined : dataLines.join("\n");
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "AbortError"
+  );
+}
