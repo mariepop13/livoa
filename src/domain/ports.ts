@@ -1,6 +1,51 @@
-import type { AppSettings, Character, Conversation, Message, Persona } from "./models";
-export interface Repository<T> { list(): Promise<T[]>; getById(id: string): Promise<T | null>; save(entity: T): Promise<void>; delete(id: string): Promise<void>; }
-export type CharacterRepository = Repository<Character>; export type PersonaRepository = Repository<Persona>; export type ConversationRepository = Repository<Conversation>; export type MessageRepository = Repository<Message>;
-export interface SettingsRepository { get(): Promise<AppSettings | null>; save(settings: AppSettings): Promise<void>; }
-export type AiModel = { id: string; displayName: string; providerId: string }; export type ChatMessage = { role: "user" | "assistant" | "system"; content: string }; export type ChatRequest = { model: string; messages: ChatMessage[] }; export type ChatChunk = { type: "text" | "done"; content?: string }; export type ProviderError = { code: "authentication" | "network" | "rate_limit" | "invalid_response" | "unknown"; message: string; retryable: boolean };
-export interface AiProvider { readonly id: string; listModels(): Promise<AiModel[]>; streamChat(request: ChatRequest, signal?: AbortSignal): AsyncIterable<ChatChunk>; } export interface CredentialStore { has(providerId: string): Promise<boolean>; save(providerId: string, credential: string): Promise<void>; remove(providerId: string): Promise<void>; }
+import type {
+  AppSettings,
+  Character,
+  Conversation,
+  Message,
+  Persona,
+} from "./models";
+export interface Repository<T> {
+  list(): Promise<T[]>;
+  getById(id: string): Promise<T | null>;
+  save(entity: T): Promise<void>;
+  delete(id: string): Promise<void>;
+}
+export type CharacterRepository = Repository<Character>;
+export type PersonaRepository = Repository<Persona>;
+export type ConversationRepository = Repository<Conversation>;
+export type MessageRepository = Repository<Message>;
+export interface SettingsRepository {
+  get(): Promise<AppSettings | null>;
+  save(settings: AppSettings): Promise<void>;
+}
+export type AiModel = { id: string; displayName: string; providerId: string };
+export type ChatMessage = {
+  role: "user" | "assistant" | "system";
+  content: string;
+};
+export type ChatRequest = { model: string; messages: ChatMessage[] };
+export type ChatChunk = { type: "text" | "done"; content?: string };
+export type ProviderError = {
+  code:
+    | "authentication"
+    | "network"
+    | "rate_limit"
+    | "invalid_response"
+    | "unknown";
+  message: string;
+  retryable: boolean;
+};
+export interface AiProvider {
+  readonly id: string;
+  listModels(): Promise<AiModel[]>;
+  streamChat(
+    request: ChatRequest,
+    signal?: AbortSignal,
+  ): AsyncIterable<ChatChunk>;
+}
+export interface CredentialStore {
+  has(providerId: string): Promise<boolean>;
+  save(providerId: string, credential: string): Promise<void>;
+  remove(providerId: string): Promise<void>;
+}
