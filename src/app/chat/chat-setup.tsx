@@ -1,16 +1,19 @@
-import type { Character, Conversation } from "@/domain/models";
+import type { Character, Conversation, Persona } from "@/domain/models";
 
 type ChatSetupProps = Readonly<{
   activeConversationId: string | undefined;
   availableConversations: readonly Conversation[];
   characters: readonly Character[];
+  personas: readonly Persona[];
   onCreateConversation: () => void;
   onSelectCharacter: (characterId: string) => void;
   onSelectConversation: (conversationId: string) => void;
+  onSelectPersona: (personaId: string) => void;
   providerLabel: string;
   selectedCharacter: Character | undefined;
   selectedCharacterId: string | undefined;
   selectedConversationId: string | undefined;
+  selectedPersonaId: string | undefined;
   streamStatus: "idle" | "loading" | "streaming" | "cancelling";
 }>;
 
@@ -22,13 +25,16 @@ export default function ChatSetup({
   activeConversationId,
   availableConversations,
   characters,
+  personas,
   onCreateConversation,
   onSelectCharacter,
   onSelectConversation,
+  onSelectPersona,
   providerLabel,
   selectedCharacter,
   selectedCharacterId,
   selectedConversationId,
+  selectedPersonaId,
   streamStatus,
 }: ChatSetupProps) {
   const isBusy = streamStatus !== "idle";
@@ -70,6 +76,27 @@ export default function ChatSetup({
         <div>
           <label
             className="text-sm font-bold text-slate-200"
+            htmlFor="chat-persona"
+          >
+            Persona
+          </label>
+          <select
+            id="chat-persona"
+            className="mt-2 w-full rounded-xl border border-slate-600 bg-slate-950 px-3 py-2.5 text-slate-100 focus:outline-none focus:ring-4 focus:ring-cyan-300/30"
+            value={selectedPersonaId ?? ""}
+            onChange={(event) => onSelectPersona(event.target.value)}
+            disabled={isBusy}
+          >
+            <option value="">No persona</option>
+            {personas.map((persona) => (
+              <option key={persona.id} value={persona.id}>
+                {persona.name}
+              </option>
+            ))}
+          </select>
+
+          <label
+            className="mt-6 block text-sm font-bold text-slate-200"
             htmlFor="chat-conversation"
           >
             Conversation
