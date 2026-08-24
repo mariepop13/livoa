@@ -41,9 +41,12 @@ export default function ChatSetup({
 
   return (
     <aside
-      className="space-y-6 rounded-3xl border border-slate-800 bg-slate-900/85 p-5 shadow-xl shadow-slate-950/25"
-      aria-label="Chat setup"
+      className="min-w-0 space-y-6 rounded-3xl border border-slate-800 bg-slate-900/85 p-5 shadow-xl shadow-slate-950/25"
+      aria-labelledby="chat-setup-title"
     >
+      <h2 id="chat-setup-title" className="sr-only">
+        Chat setup
+      </h2>
       <div>
         <label
           className="text-sm font-bold text-slate-200"
@@ -66,7 +69,11 @@ export default function ChatSetup({
             ))}
           </select>
         ) : (
-          <p className="mt-2 text-sm leading-6 text-slate-400">
+          <p
+            className="mt-2 text-sm leading-6 text-slate-400"
+            role="status"
+            aria-live="polite"
+          >
             No saved characters yet. Create one before opening a chat.
           </p>
         )}
