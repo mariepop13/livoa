@@ -32,6 +32,15 @@ const emptyDraft: ProviderDraft = {
   credential: "",
 };
 
+const fieldClassName =
+  "mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-3 text-sm text-slate-100 shadow-sm outline-none transition placeholder:text-slate-500 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-300/15 aria-[invalid=true]:border-rose-400 aria-[invalid=true]:focus:ring-rose-400/15";
+
+const secondaryButtonClassName =
+  "min-h-11 rounded-xl border border-slate-700 bg-slate-900 px-3.5 py-2.5 text-sm font-semibold text-slate-100 shadow-sm transition hover:border-slate-500 hover:bg-slate-800 focus:outline-none focus:ring-4 focus:ring-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-60";
+
+const primaryButtonClassName =
+  "min-h-11 rounded-xl bg-cyan-300 px-4 py-2.5 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-300/15 transition hover:bg-cyan-200 focus:outline-none focus:ring-4 focus:ring-cyan-300/30 disabled:cursor-not-allowed disabled:opacity-60";
+
 function draftFromProvider(
   provider: ProviderSettingsSnapshot["settings"]["providers"][number],
 ): ProviderDraft {
@@ -45,8 +54,10 @@ function draftFromProvider(
   };
 }
 
-function getErrorMessage(error: Error): string {
-  return error.message;
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : "Provider settings could not be loaded. Try again.";
 }
 
 export default function ProviderSettingsScreen({
@@ -69,6 +80,7 @@ export default function ProviderSettingsScreen({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRemovingCredential, setIsRemovingCredential] = useState<string>();
   const [editingId, setEditingId] = useState<string>();
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     if (activeService === undefined) {
@@ -77,18 +89,31 @@ export default function ProviderSettingsScreen({
 
     let isCurrent = true;
 
-    void activeService.load().then((result) => {
-      if (!isCurrent) {
-        return;
-      }
+    void activeService
+      .load()
+      .then((result) => {
+        if (!isCurrent) {
+          return;
+        }
 
-      if (!result.ok) {
-        setScreenError(getErrorMessage(result.error));
-        return;
-      }
+        if (!result.ok) {
+          setScreenError(getErrorMessage(result.error));
+          return;
+        }
 
-      setSnapshot(result.data);
-    });
+        setSnapshot(result.data);
+        setScreenError(undefined);
+      })
+      .catch((error: unknown) => {
+        if (isCurrent) {
+          setScreenError(getErrorMessage(error));
+        }
+      })
+      .finally(() => {
+        if (isCurrent) {
+          setIsLoading(false);
+        }
+      });
 
     return () => {
       isCurrent = false;
@@ -186,44 +211,90 @@ export default function ProviderSettingsScreen({
     return validationIssues.find((issue) => issue.field === field)?.message;
   }
 
+  async function reloadSettings(): Promise<void> {
+    if (activeService === undefined) {
+      return;
+    }
+
+    setIsLoading(true);
+    setScreenError(undefined);
+
+    try {
+      const result = await activeService.load();
+
+      if (!result.ok) {
+        setScreenError(getErrorMessage(result.error));
+        return;
+      }
+
+      setSnapshot(result.data);
+    } catch (error: unknown) {
+      setScreenError(getErrorMessage(error));
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
   if (activeService === undefined || snapshot === undefined) {
     return (
-      <main className="mx-auto w-full max-w-4xl p-6 sm:p-10" aria-busy="true">
-        <h1 className="text-3xl font-semibold tracking-tight">
-          Provider settings
-        </h1>
-        {screenError !== undefined ? (
-          <p
-            className="mt-4 rounded-md border border-red-300 bg-red-50 p-4 text-red-900"
-            role="alert"
+      <main
+        className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100 sm:px-6 lg:px-10"
+        aria-labelledby="provider-settings-loading-title"
+        aria-busy={isLoading}
+      >
+        <div className="mx-auto max-w-5xl rounded-3xl border border-slate-800 bg-slate-900/80 p-6 shadow-2xl shadow-slate-950/40 sm:p-10">
+          <p className="text-xs font-bold uppercase tracking-[0.22em] text-cyan-300">
+            Local-first configuration
+          </p>
+          <h1
+            id="provider-settings-loading-title"
+            className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl"
           >
-            {screenError}
-          </p>
-        ) : (
-          <p className="mt-4" role="status">
-            Loading local provider settings…
-          </p>
-        )}
+            Provider settings
+          </h1>
+          {screenError !== undefined ? (
+            <div
+              className="mt-6 rounded-xl border border-rose-400/40 bg-rose-950/40 p-4 text-rose-100"
+              role="alert"
+              aria-live="assertive"
+            >
+              <p>{screenError}</p>
+              <button
+                type="button"
+                className={`mt-4 ${secondaryButtonClassName}`}
+                onClick={() => void reloadSettings()}
+                disabled={isLoading}
+              >
+                {isLoading ? "Reloading settings…" : "Reload settings"}
+              </button>
+            </div>
+          ) : (
+            <p className="mt-4 text-slate-300" role="status" aria-live="polite">
+              Loading local provider settings…
+            </p>
+          )}
+        </div>
       </main>
     );
   }
 
   return (
     <main
-      className="mx-auto w-full max-w-4xl p-6 sm:p-10"
+      className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100 sm:px-6 lg:px-10"
       aria-labelledby="provider-settings-title"
+      aria-busy={isSubmitting || isRemovingCredential !== undefined}
     >
-      <header>
-        <p className="text-sm font-medium uppercase tracking-wide text-slate-600">
+      <header className="mx-auto max-w-5xl rounded-3xl border border-slate-800 bg-gradient-to-br from-indigo-950 via-slate-900 to-cyan-950 px-6 py-8 shadow-2xl shadow-slate-950/40 sm:px-10 sm:py-11">
+        <p className="text-xs font-bold uppercase tracking-[0.22em] text-cyan-300">
           Local-first configuration
         </p>
         <h1
           id="provider-settings-title"
-          className="mt-2 text-3xl font-semibold tracking-tight"
+          className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-4xl"
         >
           Provider settings
         </h1>
-        <p className="mt-3 max-w-2xl text-slate-700">
+        <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300">
           Configure provider metadata and the model used for local
           conversations. Settings stay on this device.
         </p>
@@ -231,8 +302,9 @@ export default function ProviderSettingsScreen({
 
       {screenError !== undefined ? (
         <p
-          className="mt-6 rounded-md border border-red-300 bg-red-50 p-4 text-red-900"
+          className="mx-auto mt-6 max-w-5xl rounded-xl border border-rose-400/40 bg-rose-950/40 p-4 text-rose-100"
           role="alert"
+          aria-live="assertive"
         >
           {screenError}
         </p>
@@ -240,7 +312,7 @@ export default function ProviderSettingsScreen({
 
       {statusMessage !== undefined ? (
         <p
-          className="mt-6 rounded-md border border-green-300 bg-green-50 p-4 text-green-900"
+          className="mx-auto mt-6 max-w-5xl rounded-xl border border-emerald-400/35 bg-emerald-950/45 p-4 text-emerald-100"
           role="status"
           aria-live="polite"
         >
@@ -249,11 +321,14 @@ export default function ProviderSettingsScreen({
       ) : null}
 
       <section
-        className="mt-8 rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
+        className="mx-auto mt-8 min-w-0 max-w-5xl rounded-3xl border border-slate-800 bg-slate-900/85 p-5 shadow-xl shadow-slate-950/25 sm:p-8"
         aria-labelledby="provider-form-title"
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 id="provider-form-title" className="text-xl font-semibold">
+          <h2
+            id="provider-form-title"
+            className="text-2xl font-bold tracking-tight text-white"
+          >
             {editingId === undefined
               ? "Add provider configuration"
               : `Edit ${editingId}`}
@@ -261,7 +336,7 @@ export default function ProviderSettingsScreen({
           {editingId !== undefined ? (
             <button
               type="button"
-              className="rounded-md border border-slate-400 px-3 py-2 text-sm font-medium hover:bg-slate-50"
+              className={secondaryButtonClassName}
               onClick={startNewConfiguration}
             >
               Add another provider
@@ -271,8 +346,9 @@ export default function ProviderSettingsScreen({
 
         {validationIssues.length > 0 ? (
           <div
-            className="mt-5 rounded-md border border-red-300 bg-red-50 p-4 text-red-900"
+            className="mt-5 rounded-xl border border-rose-400/40 bg-rose-950/40 p-4 text-rose-100"
             role="alert"
+            aria-live="assertive"
             aria-labelledby="provider-form-errors"
           >
             <h3 id="provider-form-errors" className="font-semibold">
@@ -286,37 +362,50 @@ export default function ProviderSettingsScreen({
           </div>
         ) : null}
 
-        <form className="mt-6 space-y-6" onSubmit={handleSubmit} noValidate>
+        <form
+          className="mt-6 space-y-6"
+          onSubmit={handleSubmit}
+          noValidate
+          aria-describedby={
+            validationIssues.length > 0 ? "provider-form-errors" : undefined
+          }
+        >
           <fieldset className="space-y-5">
-            <legend className="text-base font-semibold">
+            <legend className="text-base font-bold text-white">
               Provider metadata
             </legend>
             <div>
               <label
-                className="block text-sm font-medium"
+                className="block text-sm font-semibold text-slate-100"
                 htmlFor="provider-configuration-id"
               >
                 Configuration ID
               </label>
               <p
                 id="provider-configuration-id-help"
-                className="mt-1 text-sm text-slate-600"
+                className="mt-1 text-sm leading-6 text-slate-400"
               >
                 A local name used to identify this configuration.
               </p>
               <input
                 id="provider-configuration-id"
                 name="id"
-                className="mt-2 w-full rounded-md border border-slate-400 px-3 py-2"
+                className={fieldClassName}
                 value={draft.id}
                 onChange={(event) => updateDraft("id", event.target.value)}
-                aria-describedby="provider-configuration-id-help provider-configuration-id-error"
+                required
+                aria-describedby={`provider-configuration-id-help${
+                  fieldError("id") === undefined
+                    ? ""
+                    : " provider-configuration-id-error"
+                }`}
+                aria-required="true"
                 aria-invalid={fieldError("id") !== undefined}
               />
               {fieldError("id") !== undefined ? (
                 <p
                   id="provider-configuration-id-error"
-                  className="mt-1 text-sm text-red-700"
+                  className="mt-1 text-sm font-medium text-rose-300"
                 >
                   {fieldError("id")}
                 </p>
@@ -325,27 +414,39 @@ export default function ProviderSettingsScreen({
 
             <div>
               <label
-                className="block text-sm font-medium"
+                className="block text-sm font-semibold text-slate-100"
                 htmlFor="provider-id"
               >
                 Provider ID
               </label>
-              <p id="provider-id-help" className="mt-1 text-sm text-slate-600">
+              <p
+                id="provider-id-help"
+                className="mt-1 text-sm leading-6 text-slate-400"
+              >
                 The adapter identifier that will handle this provider.
               </p>
               <input
                 id="provider-id"
                 name="providerId"
-                className="mt-2 w-full rounded-md border border-slate-400 px-3 py-2"
+                className={fieldClassName}
                 value={draft.providerId}
                 onChange={(event) =>
                   updateDraft("providerId", event.target.value)
                 }
-                aria-describedby="provider-id-help provider-id-error"
+                required
+                aria-describedby={`provider-id-help${
+                  fieldError("providerId") === undefined
+                    ? ""
+                    : " provider-id-error"
+                }`}
+                aria-required="true"
                 aria-invalid={fieldError("providerId") !== undefined}
               />
               {fieldError("providerId") !== undefined ? (
-                <p id="provider-id-error" className="mt-1 text-sm text-red-700">
+                <p
+                  id="provider-id-error"
+                  className="mt-1 text-sm font-medium text-rose-300"
+                >
                   {fieldError("providerId")}
                 </p>
               ) : null}
@@ -353,32 +454,36 @@ export default function ProviderSettingsScreen({
 
             <div>
               <label
-                className="block text-sm font-medium"
+                className="block text-sm font-semibold text-slate-100"
                 htmlFor="provider-base-url"
               >
                 Base URL{" "}
-                <span className="font-normal text-slate-600">(optional)</span>
+                <span className="font-normal text-slate-500">(optional)</span>
               </label>
               <input
                 id="provider-base-url"
                 name="baseUrl"
                 type="url"
-                className="mt-2 w-full rounded-md border border-slate-400 px-3 py-2"
+                className={fieldClassName}
                 value={draft.baseUrl}
                 onChange={(event) => updateDraft("baseUrl", event.target.value)}
-                aria-describedby="provider-base-url-help provider-base-url-error"
+                aria-describedby={`provider-base-url-help${
+                  fieldError("baseUrl") === undefined
+                    ? ""
+                    : " provider-base-url-error"
+                }`}
                 aria-invalid={fieldError("baseUrl") !== undefined}
               />
               <p
                 id="provider-base-url-help"
-                className="mt-1 text-sm text-slate-600"
+                className="mt-1 text-sm leading-6 text-slate-400"
               >
                 Use an HTTP or HTTPS URL. Do not put credentials in the URL.
               </p>
               {fieldError("baseUrl") !== undefined ? (
                 <p
                   id="provider-base-url-error"
-                  className="mt-1 text-sm text-red-700"
+                  className="mt-1 text-sm font-medium text-rose-300"
                 >
                   {fieldError("baseUrl")}
                 </p>
@@ -387,27 +492,31 @@ export default function ProviderSettingsScreen({
 
             <div>
               <label
-                className="block text-sm font-medium"
+                className="block text-sm font-semibold text-slate-100"
                 htmlFor="provider-model-id"
               >
                 Selected model ID{" "}
-                <span className="font-normal text-slate-600">(optional)</span>
+                <span className="font-normal text-slate-500">(optional)</span>
               </label>
               <input
                 id="provider-model-id"
                 name="selectedModelId"
-                className="mt-2 w-full rounded-md border border-slate-400 px-3 py-2"
+                className={fieldClassName}
                 value={draft.selectedModelId}
                 onChange={(event) =>
                   updateDraft("selectedModelId", event.target.value)
                 }
-                aria-describedby="provider-model-id-error"
+                aria-describedby={
+                  fieldError("selectedModelId") === undefined
+                    ? undefined
+                    : "provider-model-id-error"
+                }
                 aria-invalid={fieldError("selectedModelId") !== undefined}
               />
               {fieldError("selectedModelId") !== undefined ? (
                 <p
                   id="provider-model-id-error"
-                  className="mt-1 text-sm text-red-700"
+                  className="mt-1 text-sm font-medium text-rose-300"
                 >
                   {fieldError("selectedModelId")}
                 </p>
@@ -419,7 +528,7 @@ export default function ProviderSettingsScreen({
                 id="provider-enabled"
                 name="enabled"
                 type="checkbox"
-                className="mt-1 h-4 w-4"
+                className="mt-1 h-4 w-4 accent-cyan-300"
                 checked={draft.enabled}
                 onChange={(event) =>
                   updateDraft("enabled", event.target.checked)
@@ -427,12 +536,15 @@ export default function ProviderSettingsScreen({
                 aria-describedby="provider-enabled-help"
               />
               <div>
-                <label className="font-medium" htmlFor="provider-enabled">
+                <label
+                  className="font-semibold text-slate-100"
+                  htmlFor="provider-enabled"
+                >
                   Enabled
                 </label>
                 <p
                   id="provider-enabled-help"
-                  className="text-sm text-slate-600"
+                  className="text-sm leading-6 text-slate-400"
                 >
                   Allow this provider to be used for future conversations.
                 </p>
@@ -440,14 +552,19 @@ export default function ProviderSettingsScreen({
             </div>
           </fieldset>
 
-          <fieldset className="space-y-3 border-t border-slate-200 pt-6">
-            <legend className="text-base font-semibold">BYOK credential</legend>
-            <p id="provider-credential-help" className="text-sm text-slate-600">
+          <fieldset className="space-y-3 border-t border-slate-800 pt-6">
+            <legend className="text-base font-bold text-white">
+              BYOK credential
+            </legend>
+            <p
+              id="provider-credential-help"
+              className="text-sm leading-6 text-slate-400"
+            >
               Optional. The credential is stored separately and will never be
               shown again.
             </p>
             <label
-              className="block text-sm font-medium"
+              className="block text-sm font-semibold text-slate-100"
               htmlFor="provider-credential"
             >
               New BYOK credential
@@ -457,18 +574,22 @@ export default function ProviderSettingsScreen({
               name="credential"
               type="password"
               autoComplete="new-password"
-              className="w-full rounded-md border border-slate-400 px-3 py-2"
+              className={fieldClassName}
               value={draft.credential}
               onChange={(event) =>
                 updateDraft("credential", event.target.value)
               }
-              aria-describedby="provider-credential-help provider-credential-error"
+              aria-describedby={`provider-credential-help${
+                fieldError("credential") === undefined
+                  ? ""
+                  : " provider-credential-error"
+              }`}
               aria-invalid={fieldError("credential") !== undefined}
             />
             {fieldError("credential") !== undefined ? (
               <p
                 id="provider-credential-error"
-                className="text-sm text-red-700"
+                className="text-sm font-medium text-rose-300"
               >
                 {fieldError("credential")}
               </p>
@@ -477,7 +598,7 @@ export default function ProviderSettingsScreen({
 
           <button
             type="submit"
-            className="rounded-md bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+            className={primaryButtonClassName}
             disabled={isSubmitting}
           >
             {isSubmitting ? "Saving…" : "Save provider configuration"}
@@ -485,34 +606,46 @@ export default function ProviderSettingsScreen({
         </form>
       </section>
 
-      <section className="mt-8" aria-labelledby="saved-providers-title">
-        <h2 id="saved-providers-title" className="text-xl font-semibold">
+      <section
+        className="mx-auto mt-8 min-w-0 max-w-5xl"
+        aria-labelledby="saved-providers-title"
+      >
+        <h2
+          id="saved-providers-title"
+          className="text-2xl font-bold tracking-tight text-white"
+        >
           Saved providers
         </h2>
         {snapshot.settings.providers.length === 0 ? (
-          <p className="mt-3 rounded-md border border-dashed border-slate-300 p-5 text-slate-700">
+          <p
+            className="mt-4 rounded-2xl border border-dashed border-slate-700 bg-slate-900/60 p-5 text-slate-400"
+            role="status"
+            aria-live="polite"
+          >
             No provider configurations saved yet.
           </p>
         ) : (
-          <ul className="mt-4 space-y-4">
+          <ul className="mt-4 space-y-4" aria-label="Saved providers list">
             {snapshot.settings.providers.map((provider) => (
               <li
                 key={provider.id}
-                className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+                className="rounded-2xl border border-slate-800 bg-slate-900/85 p-5 shadow-xl shadow-slate-950/20"
               >
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <h3 className="text-lg font-semibold">{provider.id}</h3>
-                    <p className="mt-1 text-sm text-slate-700">
+                    <h3 className="text-lg font-bold text-white">
+                      {provider.id}
+                    </h3>
+                    <p className="mt-1 text-sm text-slate-400">
                       Provider ID: {provider.providerId}
                     </p>
-                    <p className="text-sm text-slate-700">
+                    <p className="text-sm text-slate-400">
                       Model: {provider.selectedModelId ?? "Not selected"}
                     </p>
-                    <p className="text-sm text-slate-700">
+                    <p className="text-sm text-slate-400">
                       Status: {provider.enabled ? "Enabled" : "Disabled"}
                     </p>
-                    <p className="mt-2 text-sm text-slate-700">
+                    <p className="mt-2 text-sm text-slate-300">
                       Credential:{" "}
                       {snapshot.credentialStatus[provider.id]
                         ? "Saved and hidden"
@@ -522,7 +655,7 @@ export default function ProviderSettingsScreen({
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
-                      className="rounded-md border border-slate-400 px-3 py-2 text-sm font-medium hover:bg-slate-50"
+                      className={secondaryButtonClassName}
                       onClick={() => startEditing(provider.id)}
                     >
                       Edit {provider.id}
@@ -530,7 +663,7 @@ export default function ProviderSettingsScreen({
                     {snapshot.credentialStatus[provider.id] ? (
                       <button
                         type="button"
-                        className="rounded-md border border-red-400 px-3 py-2 text-sm font-medium text-red-800 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        className={`${secondaryButtonClassName} border-rose-400/50 text-rose-200 hover:border-rose-300 hover:bg-rose-950/40`}
                         onClick={() =>
                           handleRemoveCredential(provider.providerId)
                         }

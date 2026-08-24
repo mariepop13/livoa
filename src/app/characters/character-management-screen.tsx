@@ -250,7 +250,7 @@ export default function CharacterManagementScreen({
   const [statusMessage, setStatusMessage] = useState<string>();
   const [screenError, setScreenError] = useState<string>();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     if (activeService === undefined) {
@@ -410,23 +410,41 @@ export default function CharacterManagementScreen({
     return validationIssues.find((issue) => issue.field === field)?.message;
   }
 
+  useEffect(() => {
+    const firstInvalidField = validationIssues.find(
+      (issue) => issue.field !== "form",
+    )?.field;
+
+    if (firstInvalidField === undefined) {
+      return;
+    }
+
+    const fieldId = `character-${firstInvalidField.replace("systemPrompt", "system-prompt")}`;
+    document.getElementById(fieldId)?.focus();
+  }, [validationIssues]);
+
   if (characters === undefined) {
     return (
       <main
         className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100 sm:px-6 lg:px-10"
-        aria-busy="true"
+        aria-labelledby="characters-loading-title"
+        aria-busy={isLoading}
       >
         <div className="mx-auto max-w-6xl rounded-3xl border border-slate-800 bg-slate-900/70 p-6 shadow-2xl shadow-slate-950/40 sm:p-10">
           <p className="text-xs font-bold uppercase tracking-[0.22em] text-cyan-300">
             Character studio
           </p>
-          <h1 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">
+          <h1
+            id="characters-loading-title"
+            className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl"
+          >
             Characters
           </h1>
           {screenError !== undefined ? (
             <div
               className="mt-6 rounded-xl border border-rose-400/40 bg-rose-950/40 p-4 text-rose-100"
               role="alert"
+              aria-live="assertive"
             >
               <p>{screenError}</p>
               <button
@@ -439,7 +457,7 @@ export default function CharacterManagementScreen({
               </button>
             </div>
           ) : (
-            <p className="mt-4 text-slate-300" role="status">
+            <p className="mt-4 text-slate-300" role="status" aria-live="polite">
               Loading characters…
             </p>
           )}
@@ -484,6 +502,7 @@ export default function CharacterManagementScreen({
           <div
             className="mt-6 rounded-xl border border-rose-400/40 bg-rose-950/40 p-4 text-rose-100 shadow-lg shadow-rose-950/20"
             role="alert"
+            aria-live="assertive"
           >
             <p>{screenError}</p>
             <button
@@ -509,7 +528,7 @@ export default function CharacterManagementScreen({
 
         <div className="mt-8 grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
           <section
-            className="rounded-3xl border border-slate-800 bg-slate-900/85 p-5 shadow-xl shadow-slate-950/25 sm:p-8"
+            className="min-w-0 rounded-3xl border border-slate-800 bg-slate-900/85 p-5 shadow-xl shadow-slate-950/25 sm:p-8"
             aria-labelledby="character-form-title"
           >
             <div className="flex flex-wrap items-start justify-between gap-4">
@@ -544,6 +563,7 @@ export default function CharacterManagementScreen({
               <div
                 className="mt-6 rounded-xl border border-rose-400/40 bg-rose-950/40 p-4 text-rose-100"
                 role="alert"
+                aria-live="assertive"
                 aria-labelledby="character-form-errors"
               >
                 <h3
@@ -560,7 +580,16 @@ export default function CharacterManagementScreen({
               </div>
             ) : null}
 
-            <form className="mt-8 space-y-8" onSubmit={handleSubmit} noValidate>
+            <form
+              className="mt-8 space-y-8"
+              onSubmit={handleSubmit}
+              noValidate
+              aria-describedby={
+                validationIssues.length > 0
+                  ? "character-form-errors"
+                  : undefined
+              }
+            >
               <fieldset className="space-y-6">
                 <legend className="text-base font-bold text-white">
                   Character details
@@ -731,7 +760,7 @@ export default function CharacterManagementScreen({
           </section>
 
           <section
-            className="rounded-3xl border border-slate-800 bg-slate-900/85 p-5 shadow-xl shadow-slate-950/25 sm:p-6 xl:sticky xl:top-8"
+            className="min-w-0 rounded-3xl border border-slate-800 bg-slate-900/85 p-5 shadow-xl shadow-slate-950/25 sm:p-6 xl:sticky xl:top-8"
             aria-labelledby="saved-characters-title"
           >
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -755,7 +784,10 @@ export default function CharacterManagementScreen({
             </div>
 
             {characters.length === 0 ? (
-              <div className="mt-6 rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 p-5">
+              <div
+                className="mt-6 rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 p-5"
+                aria-live="polite"
+              >
                 <div
                   className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-300/10 text-lg text-cyan-200"
                   aria-hidden="true"
@@ -770,7 +802,7 @@ export default function CharacterManagementScreen({
                 </p>
               </div>
             ) : (
-              <ul className="mt-6 space-y-3">
+              <ul className="mt-6 space-y-3" aria-label="Saved characters list">
                 {characters.map((character) => (
                   <li
                     key={character.id}
