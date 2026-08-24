@@ -8,7 +8,14 @@ import {
   type ProviderConfigurationValidationIssue,
   type ProviderSettingsSnapshot,
 } from "@/application/providers/provider-settings";
-import { createBrowserProviderSettingsService } from "./browser-provider-settings";
+import type { ProviderModelDiscoveryService } from "@/application/providers/provider-model-discovery";
+import {
+  createBrowserProviderModelDiscoveryService,
+  createBrowserProviderSettingsService,
+  openRouterConfigurationDefaults,
+} from "./browser-provider-settings";
+import ProviderModelSelect from "./provider-model-select";
+import { useProviderModelDiscovery } from "./use-provider-model-discovery";
 
 type ProviderDraft = {
   id: string;
@@ -20,17 +27,19 @@ type ProviderDraft = {
 };
 
 type ProviderSettingsScreenProps = Readonly<{
+  modelDiscoveryService?: ProviderModelDiscoveryService;
   service?: ProviderSettingsService;
 }>;
 
-const emptyDraft: ProviderDraft = {
-  id: "",
-  providerId: "",
-  baseUrl: "",
-  selectedModelId: "",
-  enabled: true,
-  credential: "",
-};
+function createOpenRouterDraft(): ProviderDraft {
+  return {
+    ...openRouterConfigurationDefaults,
+    id: "",
+    selectedModelId: "",
+    enabled: true,
+    credential: "",
+  };
+}
 
 const fieldClassName =
   "mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-3 text-sm text-slate-100 shadow-sm outline-none transition placeholder:text-slate-500 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-300/15 aria-[invalid=true]:border-rose-400 aria-[invalid=true]:focus:ring-rose-400/15";
@@ -61,6 +70,7 @@ function getErrorMessage(error: unknown): string {
 }
 
 export default function ProviderSettingsScreen({
+  modelDiscoveryService,
   service,
 }: ProviderSettingsScreenProps) {
   const [activeService] = useState<ProviderSettingsService | undefined>(() => {
@@ -70,8 +80,21 @@ export default function ProviderSettingsScreen({
 
     return createBrowserProviderSettingsService();
   });
+  const [activeModelDiscoveryService] = useState<
+    ProviderModelDiscoveryService | undefined
+  >(() => {
+    if (
+      modelDiscoveryService !== undefined ||
+      service !== undefined ||
+      typeof window === "undefined"
+    ) {
+      return modelDiscoveryService;
+    }
+
+    return createBrowserProviderModelDiscoveryService();
+  });
   const [snapshot, setSnapshot] = useState<ProviderSettingsSnapshot>();
-  const [draft, setDraft] = useState<ProviderDraft>(emptyDraft);
+  const [draft, setDraft] = useState<ProviderDraft>(createOpenRouterDraft);
   const [validationIssues, setValidationIssues] = useState<
     readonly ProviderConfigurationValidationIssue[]
   >([]);
@@ -81,6 +104,7 @@ export default function ProviderSettingsScreen({
   const [isRemovingCredential, setIsRemovingCredential] = useState<string>();
   const [editingId, setEditingId] = useState<string>();
   const [isLoading, setIsLoading] = useState(true);
+  const modelDiscovery = useProviderModelDiscovery(activeModelDiscoveryService);
 
   useEffect(() => {
     if (activeService === undefined) {
@@ -131,7 +155,7 @@ export default function ProviderSettingsScreen({
 
   function startNewConfiguration(): void {
     setEditingId(undefined);
-    setDraft(emptyDraft);
+    setDraft(createOpenRouterDraft());
     setValidationIssues([]);
     setStatusMessage(undefined);
   }
@@ -177,7 +201,7 @@ export default function ProviderSettingsScreen({
     }
 
     setSnapshot(result.data);
-    setDraft(emptyDraft);
+    setDraft(createOpenRouterDraft());
     setEditingId(undefined);
     setStatusMessage("Provider configuration saved.");
     setIsSubmitting(false);
@@ -423,16 +447,14 @@ export default function ProviderSettingsScreen({
                 id="provider-id-help"
                 className="mt-1 text-sm leading-6 text-slate-400"
               >
-                The adapter identifier that will handle this provider.
+                OpenRouter uses the existing OpenAI-compatible adapter.
               </p>
               <input
                 id="provider-id"
                 name="providerId"
                 className={fieldClassName}
                 value={draft.providerId}
-                onChange={(event) =>
-                  updateDraft("providerId", event.target.value)
-                }
+                readOnly
                 required
                 aria-describedby={`provider-id-help${
                   fieldError("providerId") === undefined
@@ -457,8 +479,7 @@ export default function ProviderSettingsScreen({
                 className="block text-sm font-semibold text-slate-100"
                 htmlFor="provider-base-url"
               >
-                Base URL{" "}
-                <span className="font-normal text-slate-500">(optional)</span>
+                OpenRouter base URL
               </label>
               <input
                 id="provider-base-url"
@@ -466,7 +487,7 @@ export default function ProviderSettingsScreen({
                 type="url"
                 className={fieldClassName}
                 value={draft.baseUrl}
-                onChange={(event) => updateDraft("baseUrl", event.target.value)}
+                readOnly
                 aria-describedby={`provider-base-url-help${
                   fieldError("baseUrl") === undefined
                     ? ""
@@ -478,7 +499,8 @@ export default function ProviderSettingsScreen({
                 id="provider-base-url-help"
                 className="mt-1 text-sm leading-6 text-slate-400"
               >
-                Use an HTTP or HTTPS URL. Do not put credentials in the URL.
+                Model discovery uses OpenRouter&apos;s public API. Credentials
+                are never placed in this URL.
               </p>
               {fieldError("baseUrl") !== undefined ? (
                 <p
@@ -490,38 +512,13 @@ export default function ProviderSettingsScreen({
               ) : null}
             </div>
 
-            <div>
-              <label
-                className="block text-sm font-semibold text-slate-100"
-                htmlFor="provider-model-id"
-              >
-                Selected model ID{" "}
-                <span className="font-normal text-slate-500">(optional)</span>
-              </label>
-              <input
-                id="provider-model-id"
-                name="selectedModelId"
-                className={fieldClassName}
-                value={draft.selectedModelId}
-                onChange={(event) =>
-                  updateDraft("selectedModelId", event.target.value)
-                }
-                aria-describedby={
-                  fieldError("selectedModelId") === undefined
-                    ? undefined
-                    : "provider-model-id-error"
-                }
-                aria-invalid={fieldError("selectedModelId") !== undefined}
-              />
-              {fieldError("selectedModelId") !== undefined ? (
-                <p
-                  id="provider-model-id-error"
-                  className="mt-1 text-sm font-medium text-rose-300"
-                >
-                  {fieldError("selectedModelId")}
-                </p>
-              ) : null}
-            </div>
+            <ProviderModelSelect
+              error={fieldError("selectedModelId")}
+              selectedModelId={draft.selectedModelId}
+              state={modelDiscovery.state}
+              onChange={(modelId) => updateDraft("selectedModelId", modelId)}
+              onRefresh={() => void modelDiscovery.refresh()}
+            />
 
             <div className="flex items-start gap-3">
               <input
@@ -560,8 +557,8 @@ export default function ProviderSettingsScreen({
               id="provider-credential-help"
               className="text-sm leading-6 text-slate-400"
             >
-              Optional. The credential is stored separately and will never be
-              shown again.
+              Required for chat. The credential is stored separately and will
+              never be shown again. Public model discovery does not use it.
             </p>
             <label
               className="block text-sm font-semibold text-slate-100"

@@ -54,7 +54,8 @@ const providerConfigurationSchema = z.object({
   credential: z
     .string()
     .trim()
-    .regex(/^[\x21-\x7e]+$/),
+    .regex(/^[\x21-\x7e]+$/)
+    .optional(),
 });
 
 const modelListResponseSchema = z.object({
@@ -91,7 +92,7 @@ type Fetcher = typeof globalThis.fetch;
 export type OpenAiCompatibleProviderOptions = Readonly<{
   id: string;
   baseUrl: string;
-  credential: string;
+  credential?: string;
   fetcher?: Fetcher;
 }>;
 
@@ -114,7 +115,7 @@ export class OpenAiCompatibleProvider implements AiProvider {
   public readonly id: string;
 
   readonly #baseUrl: URL;
-  readonly #credential: string;
+  readonly #credential: string | undefined;
   readonly #fetcher: Fetcher;
 
   public constructor(options: OpenAiCompatibleProviderOptions) {
@@ -161,6 +162,10 @@ export class OpenAiCompatibleProvider implements AiProvider {
     request: ChatRequest,
     signal?: AbortSignal,
   ): AsyncIterable<ChatChunk> {
+    if (this.#credential === undefined) {
+      throw new OpenAiCompatibleProviderError("authentication");
+    }
+
     const parsedRequest = chatRequestSchema.safeParse(request);
 
     if (!parsedRequest.success) {
@@ -254,10 +259,11 @@ export class OpenAiCompatibleProvider implements AiProvider {
   }
 
   #headers(accept: string, includeContentType = false): Headers {
-    const headers = new Headers({
-      Accept: accept,
-      Authorization: `Bearer ${this.#credential}`,
-    });
+    const headers = new Headers({ Accept: accept });
+
+    if (this.#credential !== undefined) {
+      headers.set("Authorization", `Bearer ${this.#credential}`);
+    }
 
     if (includeContentType) {
       headers.set("Content-Type", "application/json");
