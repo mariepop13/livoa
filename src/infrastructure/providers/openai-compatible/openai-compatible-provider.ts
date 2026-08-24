@@ -51,7 +51,10 @@ const httpBaseUrlSchema = z.url().refine(
 const providerConfigurationSchema = z.object({
   id: z.string().trim().min(1),
   baseUrl: z.string().trim().pipe(httpBaseUrlSchema),
-  credential: z.string().trim().min(1),
+  credential: z
+    .string()
+    .trim()
+    .regex(/^[\x21-\x7e]+$/),
 });
 
 const modelListResponseSchema = z.object({
@@ -170,7 +173,8 @@ export class OpenAiCompatibleProvider implements AiProvider {
       "chat/completions",
       {
         body: JSON.stringify({
-          ...parsedRequest.data,
+          messages: parsedRequest.data.messages,
+          model: parsedRequest.data.model,
           stream: true,
         }),
         headers: this.#headers("text/event-stream", true),
@@ -185,6 +189,8 @@ export class OpenAiCompatibleProvider implements AiProvider {
     }
 
     for await (const data of readServerSentEventData(response.body, signal)) {
+      signal?.throwIfAborted();
+
       if (data === "[DONE]") {
         yield { type: "done" };
         return;
@@ -193,6 +199,8 @@ export class OpenAiCompatibleProvider implements AiProvider {
       const parsedChunk = parseJsonChunk(data);
 
       for (const choice of parsedChunk.choices) {
+        signal?.throwIfAborted();
+
         if (
           choice.delta.content !== undefined &&
           choice.delta.content !== null
@@ -215,15 +223,18 @@ export class OpenAiCompatibleProvider implements AiProvider {
     let response: Response;
 
     try {
-      response = await this.#fetcher(this.#endpoint(endpoint), {
-        ...init,
-        cache: "no-store",
-        credentials: "omit",
-        redirect: "error",
-      });
-    } catch (error: unknown) {
-      if (signal?.aborted === true || isAbortError(error)) {
-        throw error;
+      response = await awaitWithAbortSignal(
+        this.#fetcher(this.#endpoint(endpoint), {
+          ...init,
+          cache: "no-store",
+          credentials: "omit",
+          redirect: "error",
+        }),
+        signal,
+      );
+    } catch {
+      if (signal?.aborted === true) {
+        signal.throwIfAborted();
       }
 
       throw new OpenAiCompatibleProviderError("network");
@@ -301,7 +312,14 @@ async function* readServerSentEventData(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
 ): AsyncIterable<string> {
-  const reader = body.getReader();
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+
+  try {
+    reader = body.getReader();
+  } catch {
+    throw new OpenAiCompatibleProviderError("invalid_response");
+  }
+
   const decoder = new TextDecoder();
   let buffer = "";
   let reachedEnd = false;
@@ -313,10 +331,12 @@ async function* readServerSentEventData(
       let result: ReadableStreamReadResult<Uint8Array>;
 
       try {
-        result = await reader.read();
-      } catch (error: unknown) {
-        if (signal?.aborted === true || isAbortError(error)) {
-          throw error;
+        result = await awaitWithAbortSignal(reader.read(), signal, () => {
+          void reader.cancel().catch(() => undefined);
+        });
+      } catch {
+        if (signal?.aborted === true) {
+          signal.throwIfAborted();
         }
 
         throw new OpenAiCompatibleProviderError("network");
@@ -332,6 +352,7 @@ async function* readServerSentEventData(
 
       let event = takeNextEvent(buffer);
       while (event !== undefined) {
+        signal?.throwIfAborted();
         buffer = event.remaining;
         const data = eventData(event.value);
 
@@ -344,6 +365,7 @@ async function* readServerSentEventData(
     }
 
     if (buffer.trim().length > 0) {
+      signal?.throwIfAborted();
       const data = eventData(buffer);
 
       if (data !== undefined) {
@@ -352,14 +374,14 @@ async function* readServerSentEventData(
     }
   } finally {
     if (!reachedEnd) {
-      try {
-        await reader.cancel();
-      } catch {
-        // Stream cleanup must not replace the provider or cancellation error.
-      }
+      void reader.cancel().catch(() => undefined);
     }
 
-    reader.releaseLock();
+    try {
+      reader.releaseLock();
+    } catch {
+      // Stream cleanup must not replace the provider or cancellation error.
+    }
   }
 }
 
@@ -391,11 +413,51 @@ function eventData(event: string): string | undefined {
   return dataLines.length === 0 ? undefined : dataLines.join("\n");
 }
 
-function isAbortError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "name" in error &&
-    error.name === "AbortError"
-  );
+function awaitWithAbortSignal<T>(
+  operation: Promise<T>,
+  signal?: AbortSignal,
+  onAbort?: () => void,
+): Promise<T> {
+  if (signal === undefined) {
+    return operation;
+  }
+
+  signal.throwIfAborted();
+
+  return new Promise<T>((resolve, reject) => {
+    const handleAbort = () => {
+      try {
+        onAbort?.();
+      } catch {
+        // Cancellation cleanup must not replace the caller's abort reason.
+      }
+
+      reject(signal.reason);
+    };
+
+    signal.addEventListener("abort", handleAbort, { once: true });
+
+    void operation.then(
+      (value) => {
+        signal.removeEventListener("abort", handleAbort);
+
+        if (signal.aborted) {
+          reject(signal.reason);
+          return;
+        }
+
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", handleAbort);
+
+        if (signal.aborted) {
+          reject(signal.reason);
+          return;
+        }
+
+        reject(error);
+      },
+    );
+  });
 }
