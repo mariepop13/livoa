@@ -14,7 +14,12 @@ import {
 import { createConversationContextAssembler } from "@/application/conversations/context";
 import { normalizeApplicationError } from "@/application/error";
 import { ProviderSettingsService } from "@/application/providers/provider-settings";
-import type { AiProvider, ChatMessage, ChatRequest } from "@/domain/ports";
+import type {
+  AiProvider,
+  ChatMessage,
+  ChatRequest,
+  CredentialReference,
+} from "@/domain/ports";
 import type {
   Character,
   Conversation,
@@ -22,7 +27,10 @@ import type {
   Persona,
   ProviderConfiguration,
 } from "@/domain/models";
-import { WebStorageCredentialStore } from "@/infrastructure/credentials/web-storage-credential-store";
+import {
+  credentialStorageKey,
+  WebStorageCredentialStore,
+} from "@/infrastructure/credentials/web-storage-credential-store";
 import { OpenAiCompatibleProvider } from "@/infrastructure/providers/openai-compatible/openai-compatible-provider";
 import {
   createIndexedDbRepositories,
@@ -61,8 +69,6 @@ const contextLimits = {
   maxMessages: 50,
   maxCharacters: 12000,
 } as const;
-
-const credentialStoragePrefix = "livoa:credentials:v1:";
 
 type BrowserChatServiceOptions = Readonly<{
   testDouble?: ChatTestDoubleMode;
@@ -111,11 +117,12 @@ function isCancelled(error: unknown, signal: AbortSignal): boolean {
   );
 }
 
-function readCredential(storage: Storage, providerId: string): string | null {
+function readCredential(
+  storage: Storage,
+  reference: CredentialReference,
+): string | null {
   try {
-    return storage.getItem(
-      `${credentialStoragePrefix}${encodeURIComponent(providerId)}`,
-    );
+    return storage.getItem(credentialStorageKey(reference));
   } catch {
     return null;
   }
@@ -362,7 +369,10 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
       );
     }
 
-    const credential = readCredential(this.#storage, configuration.providerId);
+    const credential = readCredential(this.#storage, {
+      configurationId: configuration.id,
+      providerId: configuration.providerId,
+    });
     if (credential === null) {
       throw new ChatAdapterError(
         "The saved credential is unavailable for the selected provider.",
