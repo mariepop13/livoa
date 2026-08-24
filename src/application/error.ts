@@ -20,7 +20,7 @@ export type ApplicationErrorCode =
   | "PROVIDER_ERROR";
 
 export type StorageOperation = "read" | "write" | "delete";
-export type CredentialOperation = "has" | "save" | "remove";
+export type CredentialOperation = "has" | "save" | "remove" | "migrate";
 
 export type ApplicationErrorBoundary =
   | { readonly kind: "storage"; readonly operation: StorageOperation }
@@ -99,6 +99,7 @@ const credentialMessages = {
   has: "The credential state could not be checked.",
   save: "The credential could not be saved.",
   remove: "The credential could not be removed.",
+  migrate: "The credential could not be migrated.",
 } as const satisfies Record<CredentialOperation, string>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {

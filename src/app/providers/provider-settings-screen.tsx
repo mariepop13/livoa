@@ -207,16 +207,22 @@ export default function ProviderSettingsScreen({
     setIsSubmitting(false);
   }
 
-  async function handleRemoveCredential(providerId: string) {
+  async function handleRemoveCredential(
+    configurationId: string,
+    providerId: string,
+  ) {
     if (activeService === undefined) {
       return;
     }
 
-    setIsRemovingCredential(providerId);
+    setIsRemovingCredential(configurationId);
     setStatusMessage(undefined);
     setScreenError(undefined);
 
-    const result = await activeService.removeCredential(providerId);
+    const result = await activeService.removeCredential({
+      configurationId,
+      providerId,
+    });
 
     if (!result.ok) {
       setScreenError(getErrorMessage(result.error));
@@ -623,58 +629,81 @@ export default function ProviderSettingsScreen({
           </p>
         ) : (
           <ul className="mt-4 space-y-4" aria-label="Saved providers list">
-            {snapshot.settings.providers.map((provider) => (
-              <li
-                key={provider.id}
-                className="rounded-2xl border border-slate-800 bg-slate-900/85 p-5 shadow-xl shadow-slate-950/20"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <h3 className="text-lg font-bold text-white">
-                      {provider.id}
-                    </h3>
-                    <p className="mt-1 text-sm text-slate-400">
-                      Provider ID: {provider.providerId}
-                    </p>
-                    <p className="text-sm text-slate-400">
-                      Model: {provider.selectedModelId ?? "Not selected"}
-                    </p>
-                    <p className="text-sm text-slate-400">
-                      Status: {provider.enabled ? "Enabled" : "Disabled"}
-                    </p>
-                    <p className="mt-2 text-sm text-slate-300">
-                      Credential:{" "}
-                      {snapshot.credentialStatus[provider.id]
-                        ? "Saved and hidden"
-                        : "Not saved"}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className={secondaryButtonClassName}
-                      onClick={() => startEditing(provider.id)}
-                    >
-                      Edit {provider.id}
-                    </button>
-                    {snapshot.credentialStatus[provider.id] ? (
+            {snapshot.settings.providers.map((provider) => {
+              const hasLegacyCredential =
+                snapshot.legacyCredentialProviderIds.includes(
+                  provider.providerId,
+                );
+
+              return (
+                <li
+                  key={provider.id}
+                  className="rounded-2xl border border-slate-800 bg-slate-900/85 p-5 shadow-xl shadow-slate-950/20"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <h3 className="text-lg font-bold text-white">
+                        {provider.id}
+                      </h3>
+                      <p className="mt-1 text-sm text-slate-400">
+                        Provider ID: {provider.providerId}
+                      </p>
+                      <p className="text-sm text-slate-400">
+                        Model: {provider.selectedModelId ?? "Not selected"}
+                      </p>
+                      <p className="text-sm text-slate-400">
+                        Status: {provider.enabled ? "Enabled" : "Disabled"}
+                      </p>
+                      <p className="mt-2 text-sm text-slate-300">
+                        Credential:{" "}
+                        {snapshot.credentialStatus[provider.id]
+                          ? "Saved and hidden"
+                          : hasLegacyCredential
+                            ? "Needs reassignment"
+                            : "Not saved"}
+                      </p>
+                      {hasLegacyCredential ? (
+                        <p
+                          className="mt-2 max-w-xl text-sm leading-6 text-amber-200"
+                          role="status"
+                        >
+                          An older credential is shared across configurations.
+                          Edit the intended configuration and save the
+                          credential again to assign it only there.
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        className={`${secondaryButtonClassName} border-rose-400/50 text-rose-200 hover:border-rose-300 hover:bg-rose-950/40`}
-                        onClick={() =>
-                          handleRemoveCredential(provider.providerId)
-                        }
-                        disabled={isRemovingCredential === provider.providerId}
+                        className={secondaryButtonClassName}
+                        onClick={() => startEditing(provider.id)}
                       >
-                        {isRemovingCredential === provider.providerId
-                          ? "Removing…"
-                          : "Remove saved credential"}
+                        Edit {provider.id}
                       </button>
-                    ) : null}
+                      {snapshot.credentialStatus[provider.id] ? (
+                        <button
+                          type="button"
+                          className={`${secondaryButtonClassName} border-rose-400/50 text-rose-200 hover:border-rose-300 hover:bg-rose-950/40`}
+                          onClick={() =>
+                            handleRemoveCredential(
+                              provider.id,
+                              provider.providerId,
+                            )
+                          }
+                          disabled={isRemovingCredential === provider.id}
+                          aria-label={`Remove saved credential for ${provider.id}`}
+                        >
+                          {isRemovingCredential === provider.id
+                            ? "Removing…"
+                            : "Remove saved credential"}
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
-                </div>
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

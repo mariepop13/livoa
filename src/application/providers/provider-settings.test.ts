@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { AppSettings } from "@/domain/models";
-import type { CredentialStore, SettingsRepository } from "@/domain/ports";
+import type {
+  CredentialReference,
+  CredentialStore,
+  SettingsRepository,
+} from "@/domain/ports";
 import {
   ProviderSettingsService,
   isProviderSettingsValidationError,
@@ -27,26 +31,54 @@ class MemorySettingsRepository implements SettingsRepository {
 
 class MemoryCredentialStore implements CredentialStore {
   public readonly credentials = new Map<string, string>();
-  public readonly savedCredentials: Array<readonly [string, string]> = [];
-  public readonly removedProviderIds: string[] = [];
+  public readonly legacyCredentials = new Map<string, string>();
+  public readonly savedCredentials: Array<
+    readonly [CredentialReference, string]
+  > = [];
+  public readonly removedReferences: CredentialReference[] = [];
   public saveError: Error | undefined;
 
-  public async has(providerId: string): Promise<boolean> {
-    return this.credentials.has(providerId);
+  public async has(reference: CredentialReference): Promise<boolean> {
+    return this.credentials.has(reference.configurationId);
   }
 
-  public async save(providerId: string, credential: string): Promise<void> {
+  public async save(
+    reference: CredentialReference,
+    credential: string,
+  ): Promise<void> {
     if (this.saveError !== undefined) {
       throw this.saveError;
     }
 
-    this.savedCredentials.push([providerId, credential]);
-    this.credentials.set(providerId, credential);
+    this.savedCredentials.push([reference, credential]);
+    this.credentials.set(reference.configurationId, credential);
+    this.legacyCredentials.delete(reference.providerId);
   }
 
-  public async remove(providerId: string): Promise<void> {
-    this.removedProviderIds.push(providerId);
-    this.credentials.delete(providerId);
+  public async remove(reference: CredentialReference): Promise<void> {
+    this.removedReferences.push(reference);
+    this.credentials.delete(reference.configurationId);
+  }
+
+  public async hasLegacy(reference: CredentialReference): Promise<boolean> {
+    return this.legacyCredentials.has(reference.providerId);
+  }
+
+  public async migrateLegacy(reference: CredentialReference): Promise<boolean> {
+    if (this.credentials.has(reference.configurationId)) {
+      this.legacyCredentials.delete(reference.providerId);
+      return false;
+    }
+
+    const credential = this.legacyCredentials.get(reference.providerId);
+
+    if (credential === undefined) {
+      return false;
+    }
+
+    this.credentials.set(reference.configurationId, credential);
+    this.legacyCredentials.delete(reference.providerId);
+    return true;
   }
 }
 
@@ -114,7 +146,13 @@ describe("ProviderSettingsService", () => {
       providerInput.credential,
     );
     expect(credentialStore.savedCredentials).toEqual([
-      [providerInput.providerId, providerInput.credential],
+      [
+        {
+          configurationId: providerInput.id,
+          providerId: providerInput.providerId,
+        },
+        providerInput.credential,
+      ],
     ]);
     if (!result.ok) {
       throw new Error("Expected provider settings to save.");
@@ -163,10 +201,7 @@ describe("ProviderSettingsService", () => {
       ],
     });
     const credentialStore = new MemoryCredentialStore();
-    credentialStore.credentials.set(
-      providerInput.providerId,
-      providerInput.credential,
-    );
+    credentialStore.credentials.set(providerInput.id, providerInput.credential);
     const service = new ProviderSettingsService(
       settingsRepository,
       credentialStore,
@@ -180,7 +215,7 @@ describe("ProviderSettingsService", () => {
 
     expect(result.ok).toBe(true);
     expect(credentialStore.savedCredentials).toHaveLength(0);
-    expect(credentialStore.credentials.get(providerInput.providerId)).toBe(
+    expect(credentialStore.credentials.get(providerInput.id)).toBe(
       providerInput.credential,
     );
     if (!result.ok) {
@@ -204,7 +239,47 @@ describe("ProviderSettingsService", () => {
       ],
     });
     const credentialStore = new MemoryCredentialStore();
-    credentialStore.credentials.set(
+    credentialStore.credentials.set(providerInput.id, providerInput.credential);
+    const service = new ProviderSettingsService(
+      settingsRepository,
+      credentialStore,
+    );
+
+    const result = await service.removeCredential({
+      configurationId: providerInput.id,
+      providerId: providerInput.providerId,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(credentialStore.removedReferences).toEqual([
+      {
+        configurationId: providerInput.id,
+        providerId: providerInput.providerId,
+      },
+    ]);
+    expect(credentialStore.credentials.has(providerInput.id)).toBe(false);
+    if (!result.ok) {
+      throw new Error("Expected credential removal to succeed.");
+    }
+
+    expect(result.data.credentialStatus).toEqual({
+      [providerInput.id]: false,
+    });
+  });
+
+  it("migrates a legacy credential when only one configuration uses the provider", async () => {
+    const settingsRepository = new MemorySettingsRepository({
+      theme: "system",
+      providers: [
+        {
+          id: providerInput.id,
+          providerId: providerInput.providerId,
+          enabled: true,
+        },
+      ],
+    });
+    const credentialStore = new MemoryCredentialStore();
+    credentialStore.legacyCredentials.set(
       providerInput.providerId,
       providerInput.credential,
     );
@@ -213,21 +288,103 @@ describe("ProviderSettingsService", () => {
       credentialStore,
     );
 
-    const result = await service.removeCredential(providerInput.providerId);
+    const result = await service.load();
 
     expect(result.ok).toBe(true);
-    expect(credentialStore.removedProviderIds).toEqual([
-      providerInput.providerId,
-    ]);
-    expect(credentialStore.credentials.has(providerInput.providerId)).toBe(
-      false,
-    );
     if (!result.ok) {
-      throw new Error("Expected credential removal to succeed.");
+      throw new Error("Expected credential migration to succeed.");
     }
+    expect(result.data.credentialStatus).toEqual({
+      [providerInput.id]: true,
+    });
+    expect(result.data.legacyCredentialProviderIds).toEqual([]);
+  });
 
+  it("does not assign a shared legacy credential across configurations", async () => {
+    const secondConfigurationId = "openrouter-secondary";
+    const settingsRepository = new MemorySettingsRepository({
+      theme: "system",
+      providers: [
+        {
+          id: providerInput.id,
+          providerId: providerInput.providerId,
+          enabled: true,
+        },
+        {
+          id: secondConfigurationId,
+          providerId: providerInput.providerId,
+          enabled: true,
+        },
+      ],
+    });
+    const credentialStore = new MemoryCredentialStore();
+    credentialStore.legacyCredentials.set(
+      providerInput.providerId,
+      providerInput.credential,
+    );
+    const service = new ProviderSettingsService(
+      settingsRepository,
+      credentialStore,
+    );
+
+    const result = await service.load();
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("Expected credential state to load.");
+    }
     expect(result.data.credentialStatus).toEqual({
       [providerInput.id]: false,
+      [secondConfigurationId]: false,
     });
+    expect(result.data.legacyCredentialProviderIds).toEqual([
+      providerInput.providerId,
+    ]);
+  });
+
+  it("reassigns a shared legacy credential only when one configuration is saved", async () => {
+    const secondConfigurationId = "openrouter-secondary";
+    const settingsRepository = new MemorySettingsRepository({
+      theme: "system",
+      providers: [
+        {
+          id: providerInput.id,
+          providerId: providerInput.providerId,
+          enabled: true,
+        },
+        {
+          id: secondConfigurationId,
+          providerId: providerInput.providerId,
+          enabled: true,
+        },
+      ],
+    });
+    const credentialStore = new MemoryCredentialStore();
+    credentialStore.legacyCredentials.set(
+      providerInput.providerId,
+      "legacy-secret",
+    );
+    const service = new ProviderSettingsService(
+      settingsRepository,
+      credentialStore,
+    );
+
+    const result = await service.save({
+      ...providerInput,
+      id: secondConfigurationId,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("Expected credential reassignment to succeed.");
+    }
+    expect(result.data.credentialStatus).toEqual({
+      [providerInput.id]: false,
+      [secondConfigurationId]: true,
+    });
+    expect(result.data.legacyCredentialProviderIds).toEqual([]);
+    expect(
+      credentialStore.legacyCredentials.has(providerInput.providerId),
+    ).toBe(false);
   });
 });

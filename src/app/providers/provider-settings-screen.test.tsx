@@ -14,6 +14,7 @@ import type {
   AiProvider,
   ChatChunk,
   ChatRequest,
+  CredentialReference,
   CredentialStore,
   SettingsRepository,
 } from "@/domain/ports";
@@ -39,17 +40,43 @@ class MemorySettingsRepository implements SettingsRepository {
 
 class MemoryCredentialStore implements CredentialStore {
   public readonly credentials = new Map<string, string>();
+  public readonly legacyCredentials = new Map<string, string>();
 
-  public async has(providerId: string): Promise<boolean> {
-    return this.credentials.has(providerId);
+  public async has(reference: CredentialReference): Promise<boolean> {
+    return this.credentials.has(reference.configurationId);
   }
 
-  public async save(providerId: string, credential: string): Promise<void> {
-    this.credentials.set(providerId, credential);
+  public async save(
+    reference: CredentialReference,
+    credential: string,
+  ): Promise<void> {
+    this.credentials.set(reference.configurationId, credential);
+    this.legacyCredentials.delete(reference.providerId);
   }
 
-  public async remove(providerId: string): Promise<void> {
-    this.credentials.delete(providerId);
+  public async remove(reference: CredentialReference): Promise<void> {
+    this.credentials.delete(reference.configurationId);
+  }
+
+  public async hasLegacy(reference: CredentialReference): Promise<boolean> {
+    return this.legacyCredentials.has(reference.providerId);
+  }
+
+  public async migrateLegacy(reference: CredentialReference): Promise<boolean> {
+    if (this.credentials.has(reference.configurationId)) {
+      this.legacyCredentials.delete(reference.providerId);
+      return false;
+    }
+
+    const credential = this.legacyCredentials.get(reference.providerId);
+
+    if (credential === undefined) {
+      return false;
+    }
+
+    this.credentials.set(reference.configurationId, credential);
+    this.legacyCredentials.delete(reference.providerId);
+    return true;
   }
 }
 
@@ -344,7 +371,9 @@ describe("ProviderSettingsScreen", () => {
 
   it("does not read a saved credential into the edit form and supports removal", async () => {
     const secret = "existing-secret-that-must-not-render";
-    renderScreen(createService(savedConfiguration, ["openrouter", secret]));
+    renderScreen(
+      createService(savedConfiguration, ["openrouter-local", secret]),
+    );
 
     await screen.findByText("Credential: Saved and hidden");
     fireEvent.click(
@@ -355,12 +384,66 @@ describe("ProviderSettingsScreen", () => {
     expect(screen.queryByText(secret)).not.toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Remove saved credential" }),
+      screen.getByRole("button", {
+        name: "Remove saved credential for openrouter-local",
+      }),
     );
 
     expect(await screen.findByText("Saved credential removed.")).toBeVisible();
     await waitFor(() => {
       expect(screen.getByText("Credential: Not saved")).toBeVisible();
     });
+  });
+
+  it("does not show one configuration credential as saved on another", async () => {
+    const settings: AppSettings = {
+      theme: "system",
+      providers: [
+        {
+          id: "Test1",
+          providerId: "openrouter",
+          enabled: true,
+        },
+        {
+          id: "Test 1",
+          providerId: "openrouter",
+          enabled: true,
+        },
+      ],
+    };
+
+    renderScreen(createService(settings, ["Test 1", "isolated-secret"]));
+
+    expect(await screen.findByText("Test1")).toBeVisible();
+    expect(screen.getAllByText("Credential: Saved and hidden")).toHaveLength(1);
+    expect(screen.getByText("Credential: Not saved")).toBeVisible();
+  });
+
+  it("asks for reassignment instead of guessing a shared legacy credential", async () => {
+    const settings: AppSettings = {
+      theme: "system",
+      providers: [
+        { id: "Test1", providerId: "openrouter", enabled: true },
+        { id: "Test 1", providerId: "openrouter", enabled: true },
+      ],
+    };
+    const credentialStore = new MemoryCredentialStore();
+    credentialStore.legacyCredentials.set("openrouter", "legacy-secret");
+    const service = new ProviderSettingsService(
+      new MemorySettingsRepository(settings),
+      credentialStore,
+    );
+
+    renderScreen(service);
+
+    expect(
+      await screen.findAllByText("Credential: Needs reassignment"),
+    ).toHaveLength(2);
+    expect(
+      screen.getAllByText(
+        "An older credential is shared across configurations. Edit the intended configuration and save the credential again to assign it only there.",
+      ),
+    ).toHaveLength(2);
+    expect(screen.queryByText("legacy-secret")).not.toBeInTheDocument();
   });
 });

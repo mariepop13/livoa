@@ -6,7 +6,11 @@ import {
   type AppSettings,
   type ProviderConfiguration,
 } from "@/domain/models";
-import type { CredentialStore, SettingsRepository } from "@/domain/ports";
+import type {
+  CredentialReference,
+  CredentialStore,
+  SettingsRepository,
+} from "@/domain/ports";
 import {
   ApplicationError,
   normalizeCredentialError,
@@ -65,6 +69,11 @@ export const providerConfigurationInputSchema = z.object({
   credential: optionalCredential,
 });
 
+const credentialReferenceSchema = z.object({
+  configurationId: requiredText,
+  providerId: requiredText,
+});
+
 export type ProviderConfigurationInput = z.infer<
   typeof providerConfigurationInputSchema
 >;
@@ -117,6 +126,12 @@ export type ProviderSettingsResult<T> =
 export type ProviderSettingsSnapshot = Readonly<{
   settings: AppSettings;
   credentialStatus: Readonly<Record<string, boolean>>;
+  legacyCredentialProviderIds: readonly string[];
+}>;
+
+type CredentialState = Readonly<{
+  status: Readonly<Record<string, boolean>>;
+  legacyProviderIds: readonly string[];
 }>;
 
 const defaultSettings: AppSettings = {
@@ -237,17 +252,18 @@ export class ProviderSettingsService {
       return settingsResult;
     }
 
-    const credentialStatusResult = await this.#readCredentialStatus(
+    const credentialStateResult = await this.#readCredentialState(
       settingsResult.data.providers,
     );
 
-    if (!credentialStatusResult.ok) {
-      return credentialStatusResult;
+    if (!credentialStateResult.ok) {
+      return credentialStateResult;
     }
 
     return success({
       settings: settingsResult.data,
-      credentialStatus: credentialStatusResult.data,
+      credentialStatus: credentialStateResult.data.status,
+      legacyCredentialProviderIds: credentialStateResult.data.legacyProviderIds,
     });
   }
 
@@ -299,7 +315,7 @@ export class ProviderSettingsService {
     if (inputResult.data.credential !== undefined) {
       try {
         await this.#credentialStore.save(
-          configuration.providerId,
+          this.#credentialReference(configuration),
           inputResult.data.credential,
         );
       } catch (error: unknown) {
@@ -311,20 +327,20 @@ export class ProviderSettingsService {
   }
 
   public async removeCredential(
-    providerId: unknown,
+    reference: unknown,
   ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
-    const parsedProviderId = z.string().trim().min(1).safeParse(providerId);
+    const parsedReference = credentialReferenceSchema.safeParse(reference);
 
-    if (!parsedProviderId.success) {
+    if (!parsedReference.success) {
       return failure(
         new ProviderSettingsValidationError([
-          { field: "providerId", message: validationMessages.providerId },
+          { field: "form", message: validationMessages.form },
         ]),
       );
     }
 
     try {
-      await this.#credentialStore.remove(parsedProviderId.data);
+      await this.#credentialStore.remove(parsedReference.data);
     } catch (error: unknown) {
       return failure(normalizeCredentialError(error, "remove"));
     }
@@ -340,22 +356,56 @@ export class ProviderSettingsService {
     }
   }
 
-  async #readCredentialStatus(
+  async #readCredentialState(
     providers: readonly ProviderConfiguration[],
-  ): Promise<ProviderSettingsResult<Readonly<Record<string, boolean>>>> {
+  ): Promise<ProviderSettingsResult<CredentialState>> {
     const entries: Array<readonly [string, boolean]> = [];
+    const legacyProviderIds = new Set<string>();
+    const providerConfigurationCounts = new Map<string, number>();
 
     for (const provider of providers) {
+      providerConfigurationCounts.set(
+        provider.providerId,
+        (providerConfigurationCounts.get(provider.providerId) ?? 0) + 1,
+      );
+    }
+
+    for (const provider of providers) {
+      const reference = this.#credentialReference(provider);
+
+      if (providerConfigurationCounts.get(provider.providerId) === 1) {
+        try {
+          await this.#credentialStore.migrateLegacy(reference);
+        } catch (error: unknown) {
+          return failure(normalizeCredentialError(error, "migrate"));
+        }
+      } else {
+        try {
+          if (await this.#credentialStore.hasLegacy(reference)) {
+            legacyProviderIds.add(provider.providerId);
+          }
+        } catch (error: unknown) {
+          return failure(normalizeCredentialError(error, "has"));
+        }
+      }
+
       try {
-        entries.push([
-          provider.id,
-          await this.#credentialStore.has(provider.providerId),
-        ]);
+        entries.push([provider.id, await this.#credentialStore.has(reference)]);
       } catch (error: unknown) {
         return failure(normalizeCredentialError(error, "has"));
       }
     }
 
-    return success(Object.fromEntries(entries));
+    return success({
+      status: Object.fromEntries(entries),
+      legacyProviderIds: [...legacyProviderIds],
+    });
+  }
+
+  #credentialReference(provider: ProviderConfiguration): CredentialReference {
+    return {
+      configurationId: provider.id,
+      providerId: provider.providerId,
+    };
   }
 }
