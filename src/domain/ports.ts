@@ -44,8 +44,14 @@ export interface AiProvider {
     signal?: AbortSignal,
   ): AsyncIterable<ChatChunk>;
 }
+export type CredentialReference = Readonly<{
+  configurationId: string;
+  providerId: string;
+}>;
 export interface CredentialStore {
-  has(providerId: string): Promise<boolean>;
-  save(providerId: string, credential: string): Promise<void>;
-  remove(providerId: string): Promise<void>;
+  has(reference: CredentialReference): Promise<boolean>;
+  save(reference: CredentialReference, credential: string): Promise<void>;
+  remove(reference: CredentialReference): Promise<void>;
+  hasLegacy(reference: CredentialReference): Promise<boolean>;
+  migrateLegacy(reference: CredentialReference): Promise<boolean>;
 }
