@@ -21,6 +21,7 @@ const savedCharacter: Character = {
   personality: "Curious, precise, and encouraging.",
   systemPrompt: "You are Ada Lovelace.",
   greeting: "Let us explore an idea.",
+  avatar: "https://example.com/ada.png",
   createdAt: timestamp,
   updatedAt: timestamp,
 };
@@ -113,6 +114,9 @@ describe("CharacterManagementScreen", () => {
     expect(
       screen.getByRole("button", { name: "Edit Ada Lovelace" }),
     ).toBeVisible();
+    expect(
+      screen.getByRole("img", { name: "Ada Lovelace avatar" }),
+    ).toHaveAttribute("src", "https://example.com/ada.png");
     expect(screen.getByText("1 saved character")).toBeVisible();
   });
 
@@ -133,6 +137,24 @@ describe("CharacterManagementScreen", () => {
     ).toBeVisible();
   });
 
+  it("creates a character with an accessible avatar", async () => {
+    render(<CharacterManagementScreen service={createService()} />);
+
+    await screen.findByRole("heading", { name: "Create a character" });
+    fillCharacterForm();
+    fireEvent.change(screen.getByLabelText("Avatar URL (optional)"), {
+      target: { value: "https://example.com/grace.png" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create character" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Character created.",
+    );
+    expect(
+      screen.getByRole("img", { name: "Grace Hopper avatar" }),
+    ).toHaveAttribute("src", "https://example.com/grace.png");
+  });
+
   it("edits a saved character and returns to create mode", async () => {
     render(
       <CharacterManagementScreen service={createService([savedCharacter])} />,
@@ -145,8 +167,14 @@ describe("CharacterManagementScreen", () => {
       screen.getByRole("heading", { name: "Edit character" }),
     ).toBeVisible();
     expect(screen.getByLabelText("Name")).toHaveValue("Ada Lovelace");
+    expect(screen.getByLabelText("Avatar URL (optional)")).toHaveValue(
+      "https://example.com/ada.png",
+    );
     fireEvent.change(screen.getByLabelText("Name"), {
       target: { value: "Ada Byron" },
+    });
+    fireEvent.change(screen.getByLabelText("Avatar URL (optional)"), {
+      target: { value: "https://example.com/ada-byron.png" },
     });
     fireEvent.click(
       screen.getByRole("button", { name: "Save character changes" }),
@@ -161,6 +189,34 @@ describe("CharacterManagementScreen", () => {
     ).toBeVisible();
     expect(
       screen.queryByRole("heading", { name: "Ada Lovelace" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("img", { name: "Ada Byron avatar" }),
+    ).toHaveAttribute("src", "https://example.com/ada-byron.png");
+  });
+
+  it("rejects unsafe avatar references before saving", async () => {
+    render(<CharacterManagementScreen service={createService()} />);
+
+    await screen.findByRole("heading", { name: "Create a character" });
+    fillCharacterForm();
+    fireEvent.change(screen.getByLabelText("Avatar URL (optional)"), {
+      target: { value: "javascript:alert(1)" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create character" }));
+
+    expect(
+      await screen.findByText(
+        "Enter an HTTP or HTTPS image URL without credentials, or leave it blank.",
+        { selector: "p" },
+      ),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Avatar URL (optional)")).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    expect(
+      screen.queryByRole("heading", { name: "Grace Hopper" }),
     ).not.toBeInTheDocument();
   });
 
