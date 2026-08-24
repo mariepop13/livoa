@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { z } from "zod";
 
 import {
   type CharacterApplicationService,
@@ -17,6 +18,7 @@ type CharacterDraft = {
   personality: string;
   systemPrompt: string;
   greeting: string;
+  avatar: string;
 };
 
 type CharacterManagementScreenProps = Readonly<{
@@ -37,6 +39,7 @@ const emptyDraft: CharacterDraft = {
   personality: "",
   systemPrompt: "",
   greeting: "",
+  avatar: "",
 };
 
 const validationMessages: Record<CharacterValidationField, string> = {
@@ -45,8 +48,34 @@ const validationMessages: Record<CharacterValidationField, string> = {
   personality: "Enter a personality description of 10,000 characters or fewer.",
   systemPrompt: "Enter a system prompt of 20,000 characters or fewer.",
   greeting: "Enter a greeting of 4,000 characters or fewer, or leave it blank.",
+  avatar:
+    "Enter an HTTP or HTTPS image URL without credentials, or leave it blank.",
   form: "Check the highlighted character fields.",
 };
+
+const avatarReferenceSchema = z
+  .string()
+  .trim()
+  .max(2_048)
+  .refine((value) => {
+    if (value.length === 0) {
+      return true;
+    }
+
+    const parsedUrl = z.url().safeParse(value);
+
+    if (!parsedUrl.success) {
+      return false;
+    }
+
+    const url = new URL(value);
+
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      url.username === "" &&
+      url.password === ""
+    );
+  });
 
 const fieldClassName =
   "mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-3 text-sm text-slate-100 shadow-sm outline-none transition placeholder:text-slate-500 focus:border-cyan-300 focus:ring-4 focus:ring-cyan-300/15 aria-[invalid=true]:border-rose-400 aria-[invalid=true]:focus:ring-rose-400/15";
@@ -61,7 +90,42 @@ function draftFromCharacter(character: Character): CharacterDraft {
     personality: character.personality,
     systemPrompt: character.systemPrompt,
     greeting: character.greeting ?? "",
+    avatar: getSafeAvatarReference(character.avatar) ?? "",
   };
+}
+
+function getSafeAvatarReference(value: unknown): string | undefined {
+  const parsedAvatar = avatarReferenceSchema.safeParse(value ?? "");
+
+  return parsedAvatar.success && parsedAvatar.data.length > 0
+    ? parsedAvatar.data
+    : undefined;
+}
+
+function CharacterAvatar({ character }: Readonly<{ character: Character }>) {
+  const avatarReference = getSafeAvatarReference(character.avatar);
+
+  if (avatarReference === undefined) {
+    return (
+      <div
+        className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-cyan-300/10 text-xl font-bold text-cyan-200"
+        aria-hidden="true"
+      >
+        {character.name.slice(0, 1).toUpperCase()}
+      </div>
+    );
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- Avatar hosts are user-provided and cannot be configured as static Next image sources.
+    <img
+      src={avatarReference}
+      alt={`${character.name} avatar`}
+      className="h-16 w-16 shrink-0 rounded-2xl object-cover"
+      loading="lazy"
+      referrerPolicy="no-referrer"
+    />
+  );
 }
 
 function isCharacterField(value: unknown): value is CharacterField {
@@ -70,7 +134,8 @@ function isCharacterField(value: unknown): value is CharacterField {
     value === "description" ||
     value === "personality" ||
     value === "systemPrompt" ||
-    value === "greeting"
+    value === "greeting" ||
+    value === "avatar"
   );
 }
 
@@ -288,10 +353,23 @@ export default function CharacterManagementScreen({
     setScreenError(undefined);
 
     try {
+      const parsedAvatar = avatarReferenceSchema.safeParse(draft.avatar);
+
+      if (!parsedAvatar.success) {
+        setValidationIssues([
+          { field: "avatar", message: validationMessages.avatar },
+        ]);
+        return;
+      }
+
+      const characterInput = {
+        ...draft,
+        avatar: parsedAvatar.data.length > 0 ? parsedAvatar.data : undefined,
+      };
       const result =
         editingId === undefined
-          ? await activeService.create(draft)
-          : await activeService.update({ id: editingId, ...draft });
+          ? await activeService.create(characterInput)
+          : await activeService.update({ id: editingId, ...characterInput });
 
       if (!result.ok) {
         if (result.error.kind === "validation") {
@@ -606,6 +684,30 @@ export default function CharacterManagementScreen({
                     />
                   )}
                 </CharacterFieldControl>
+
+                <CharacterFieldControl
+                  id="character-avatar"
+                  label="Avatar URL (optional)"
+                  value={draft.avatar}
+                  error={fieldError("avatar")}
+                  helpText="Use an HTTP or HTTPS image URL without embedded credentials."
+                >
+                  {({ id, value, describedBy, invalid }) => (
+                    <input
+                      id={id}
+                      name="avatar"
+                      type="url"
+                      className={fieldClassName}
+                      value={value}
+                      placeholder="https://example.com/avatar.png"
+                      onChange={(event) =>
+                        updateDraft("avatar", event.target.value)
+                      }
+                      aria-describedby={describedBy || undefined}
+                      aria-invalid={invalid}
+                    />
+                  )}
+                </CharacterFieldControl>
               </fieldset>
 
               <div className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-800 pt-6">
@@ -675,13 +777,16 @@ export default function CharacterManagementScreen({
                     className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 transition hover:border-slate-600"
                   >
                     <div className="flex h-full flex-col justify-between gap-4">
-                      <div>
-                        <h3 className="text-lg font-bold text-white">
-                          {character.name}
-                        </h3>
-                        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-400">
-                          {character.description}
-                        </p>
+                      <div className="flex items-start gap-4">
+                        <CharacterAvatar character={character} />
+                        <div className="min-w-0">
+                          <h3 className="text-lg font-bold text-white">
+                            {character.name}
+                          </h3>
+                          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-400">
+                            {character.description}
+                          </p>
+                        </div>
                       </div>
                       <button
                         type="button"
