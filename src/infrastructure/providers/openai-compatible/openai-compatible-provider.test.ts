@@ -64,6 +64,38 @@ async function collectChunks(
 }
 
 describe("OpenAiCompatibleProvider", () => {
+  it("binds the browser fetch receiver when no fetcher is injected", async () => {
+    const browserFetcher = vi.fn(async function (
+      this: unknown,
+      input: Parameters<Fetcher>[0],
+      init?: Parameters<Fetcher>[1],
+    ): Promise<Response> {
+      if (this !== globalThis) {
+        throw new TypeError("Illegal invocation");
+      }
+
+      void input;
+      void init;
+      return jsonResponse({ data: [{ id: "model-a", name: "Model A" }] });
+    });
+    vi.stubGlobal("fetch", browserFetcher);
+
+    try {
+      const provider = new OpenAiCompatibleProvider({
+        id: providerId,
+        baseUrl,
+        credential,
+      });
+
+      await expect(provider.listModels()).resolves.toEqual([
+        { id: "model-a", displayName: "Model A", providerId },
+      ]);
+      expect(browserFetcher.mock.contexts[0]).toBe(globalThis);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("lists validated models through the configured base URL and BYOK credential", async () => {
     const fetcher = vi.fn<Fetcher>().mockResolvedValue(
       jsonResponse({

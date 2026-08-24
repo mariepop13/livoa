@@ -128,7 +128,7 @@ export class OpenAiCompatibleProvider implements AiProvider {
     this.id = parsed.data.id;
     this.#baseUrl = new URL(parsed.data.baseUrl);
     this.#credential = parsed.data.credential;
-    this.#fetcher = options.fetcher ?? globalThis.fetch;
+    this.#fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
   }
 
   public async listModels(): Promise<AiModel[]> {
