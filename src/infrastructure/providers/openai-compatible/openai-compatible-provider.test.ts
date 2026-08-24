@@ -143,6 +143,28 @@ describe("OpenAiCompatibleProvider", () => {
     });
   });
 
+  it("preserves the selected model identifier in the streaming request", async () => {
+    const selectedModelRequest: ChatRequest = {
+      ...chatRequest,
+      model: "provider/model@2026-08-23",
+    };
+    const fetcher = vi
+      .fn<Fetcher>()
+      .mockResolvedValue(
+        eventStreamResponse([new TextEncoder().encode("data: [DONE]\n\n")]),
+      );
+
+    await collectChunks(
+      createProvider(fetcher).streamChat(selectedModelRequest),
+    );
+
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({
+      messages: selectedModelRequest.messages,
+      model: selectedModelRequest.model,
+      stream: true,
+    });
+  });
+
   it("rejects malformed model-list and streamed responses", async () => {
     const malformedModels = vi
       .fn<Fetcher>()
@@ -212,7 +234,76 @@ describe("OpenAiCompatibleProvider", () => {
     expect(String(thrown)).not.toContain(rawMessage);
   });
 
-  it("preserves AbortSignal cancellation and cancels the response reader", async () => {
+  it("normalizes an external AbortError when the caller did not cancel", async () => {
+    const rawMessage = `Provider aborted with ${credential}`;
+    const fetcher = vi
+      .fn<Fetcher>()
+      .mockRejectedValue(new DOMException(rawMessage, "AbortError"));
+
+    await expect(createProvider(fetcher).listModels()).rejects.toEqual(
+      expect.objectContaining({
+        code: "network",
+        message: "The provider could not be reached.",
+        retryable: true,
+      }),
+    );
+
+    try {
+      await createProvider(fetcher).listModels();
+    } catch (error: unknown) {
+      expect(String(error)).not.toContain(credential);
+      expect(String(error)).not.toContain(rawMessage);
+    }
+  });
+
+  it("normalizes unsafe response-stream failures", async () => {
+    const rawMessage = `Stream failed with ${credential}`;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error(rawMessage));
+      },
+    });
+    const fetcher = vi.fn<Fetcher>().mockResolvedValue(
+      new Response(stream, {
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    );
+
+    let thrown: unknown;
+    try {
+      await collectChunks(createProvider(fetcher).streamChat(chatRequest));
+    } catch (error: unknown) {
+      thrown = error;
+    }
+
+    expect(thrown).toEqual(
+      expect.objectContaining({
+        code: "network",
+        message: "The provider could not be reached.",
+        retryable: true,
+      }),
+    );
+    expect(String(thrown)).not.toContain(credential);
+    expect(String(thrown)).not.toContain(rawMessage);
+  });
+
+  it("honors cancellation while the provider request is pending", async () => {
+    const fetcher = vi.fn<Fetcher>().mockReturnValue(new Promise(() => {}));
+    const controller = new AbortController();
+    const iterator = createProvider(fetcher)
+      .streamChat(chatRequest, controller.signal)
+      [Symbol.asyncIterator]();
+    const pending = iterator.next();
+    const abortReason = new DOMException("Cancelled by caller", "AbortError");
+
+    controller.abort(abortReason);
+
+    await expect(pending).rejects.toBe(abortReason);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0][1]?.signal).toBe(controller.signal);
+  });
+
+  it("honors cancellation during a pending read and cancels the response reader", async () => {
     const encoder = new TextEncoder();
     const cancel = vi.fn<UnderlyingSourceCancelCallback>();
     const stream = new ReadableStream<Uint8Array>({
@@ -242,11 +333,79 @@ describe("OpenAiCompatibleProvider", () => {
     });
 
     const abortReason = new DOMException("Cancelled by caller", "AbortError");
+    const pending = iterator.next();
+    controller.abort(abortReason);
+
+    await expect(pending).rejects.toBe(abortReason);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0][1]?.signal).toBe(controller.signal);
+  });
+
+  it("stops before yielding an already-buffered event after cancellation", async () => {
+    const cancel = vi.fn<UnderlyingSourceCancelCallback>();
+    const stream = new ReadableStream<Uint8Array>({
+      cancel,
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            [
+              'data: {"choices":[{"delta":{"content":"first"}}]}\n\n',
+              'data: {"choices":[{"delta":{"content":"second"}}]}\n\n',
+            ].join(""),
+          ),
+        );
+      },
+    });
+    const fetcher = vi.fn<Fetcher>().mockResolvedValue(
+      new Response(stream, {
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    );
+    const controller = new AbortController();
+    const iterator = createProvider(fetcher)
+      .streamChat(chatRequest, controller.signal)
+      [Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toEqual({
+      done: false,
+      value: { type: "text", content: "first" },
+    });
+
+    const abortReason = new DOMException("Cancelled by caller", "AbortError");
     controller.abort(abortReason);
 
     await expect(iterator.next()).rejects.toBe(abortReason);
     expect(cancel).toHaveBeenCalledTimes(1);
-    expect(fetcher.mock.calls[0][1]?.signal).toBe(controller.signal);
+  });
+
+  it("rejects unsafe credentials without exposing them", () => {
+    const fetcher = vi.fn<Fetcher>();
+    const unsafeCredential = "secret\r\nx-leaked-header: true";
+
+    expect(
+      () =>
+        new OpenAiCompatibleProvider({
+          id: providerId,
+          baseUrl,
+          credential: unsafeCredential,
+          fetcher,
+        }),
+    ).toThrowError(OpenAiCompatibleProviderError);
+
+    try {
+      new OpenAiCompatibleProvider({
+        id: providerId,
+        baseUrl,
+        credential: unsafeCredential,
+        fetcher,
+      });
+    } catch (error: unknown) {
+      expect(error).toEqual(
+        expect.objectContaining({ code: "unknown", retryable: false }),
+      );
+      expect(String(error)).not.toContain(unsafeCredential);
+      expect(String(error)).not.toContain("x-leaked-header");
+    }
   });
 
   it("rejects unsafe base URLs without including their embedded credential", () => {
