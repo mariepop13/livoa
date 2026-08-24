@@ -84,6 +84,7 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
   const [composerValue, setComposerValue] = useState("");
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("idle");
   const [isLoading, setIsLoading] = useState(true);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [loadedConversationId, setLoadedConversationId] = useState<string>();
   const [screenError, setScreenError] = useState<string>();
   const [statusMessage, setStatusMessage] = useState<string>();
@@ -131,7 +132,7 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
     return () => {
       isCurrent = false;
     };
-  }, [activeAdapter]);
+  }, [activeAdapter, loadAttempt]);
 
   const selectedCharacter = characterById(
     snapshot?.characters ?? [],
@@ -359,8 +360,13 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
     controllerRef.current.abort();
   }
 
+  function retryLoading(): void {
+    setScreenError(undefined);
+    setLoadAttempt((current) => current + 1);
+  }
+
   if (isLoading || snapshot === undefined) {
-    return <ChatLoadingState error={screenError} />;
+    return <ChatLoadingState error={screenError} onRetry={retryLoading} />;
   }
 
   return (
@@ -368,7 +374,7 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
       className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100 sm:px-6 lg:px-10"
       aria-labelledby="chat-title"
     >
-      <div className="mx-auto max-w-6xl">
+      <div className="mx-auto min-w-0 max-w-6xl">
         <ChatPageHeader />
 
         <ChatFeedback error={screenError} status={statusMessage} />
@@ -392,7 +398,7 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
           />
 
           <section
-            className="rounded-3xl border border-slate-800 bg-slate-900/85 p-5 shadow-xl shadow-slate-950/25 sm:p-8"
+            className="min-w-0 rounded-3xl border border-slate-800 bg-slate-900/85 p-5 shadow-xl shadow-slate-950/25 sm:p-8"
             aria-labelledby="messages-title"
             aria-busy={streamStatus !== "idle"}
           >
@@ -425,12 +431,20 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
             />
 
             {selectedCharacter === undefined ? (
-              <p className="mt-8 rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 p-5 text-slate-300">
+              <p
+                className="mt-8 rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 p-5 text-slate-300"
+                role="status"
+                aria-live="polite"
+              >
                 Create a character to start a conversation.
               </p>
             ) : activeConversationId === undefined &&
               pendingUserMessage === undefined ? (
-              <p className="mt-8 rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 p-5 text-slate-300">
+              <p
+                className="mt-8 rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 p-5 text-slate-300"
+                role="status"
+                aria-live="polite"
+              >
                 Start a conversation above, then send a message.
               </p>
             ) : null}

@@ -45,8 +45,10 @@ function draftFromProvider(
   };
 }
 
-function getErrorMessage(error: Error): string {
-  return error.message;
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : "Provider settings could not be loaded. Try again.";
 }
 
 export default function ProviderSettingsScreen({
@@ -69,6 +71,7 @@ export default function ProviderSettingsScreen({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRemovingCredential, setIsRemovingCredential] = useState<string>();
   const [editingId, setEditingId] = useState<string>();
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     if (activeService === undefined) {
@@ -77,18 +80,31 @@ export default function ProviderSettingsScreen({
 
     let isCurrent = true;
 
-    void activeService.load().then((result) => {
-      if (!isCurrent) {
-        return;
-      }
+    void activeService
+      .load()
+      .then((result) => {
+        if (!isCurrent) {
+          return;
+        }
 
-      if (!result.ok) {
-        setScreenError(getErrorMessage(result.error));
-        return;
-      }
+        if (!result.ok) {
+          setScreenError(getErrorMessage(result.error));
+          return;
+        }
 
-      setSnapshot(result.data);
-    });
+        setSnapshot(result.data);
+        setScreenError(undefined);
+      })
+      .catch((error: unknown) => {
+        if (isCurrent) {
+          setScreenError(getErrorMessage(error));
+        }
+      })
+      .finally(() => {
+        if (isCurrent) {
+          setIsLoading(false);
+        }
+      });
 
     return () => {
       isCurrent = false;
@@ -186,21 +202,61 @@ export default function ProviderSettingsScreen({
     return validationIssues.find((issue) => issue.field === field)?.message;
   }
 
+  async function reloadSettings(): Promise<void> {
+    if (activeService === undefined) {
+      return;
+    }
+
+    setIsLoading(true);
+    setScreenError(undefined);
+
+    try {
+      const result = await activeService.load();
+
+      if (!result.ok) {
+        setScreenError(getErrorMessage(result.error));
+        return;
+      }
+
+      setSnapshot(result.data);
+    } catch (error: unknown) {
+      setScreenError(getErrorMessage(error));
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
   if (activeService === undefined || snapshot === undefined) {
     return (
-      <main className="mx-auto w-full max-w-4xl p-6 sm:p-10" aria-busy="true">
-        <h1 className="text-3xl font-semibold tracking-tight">
+      <main
+        className="mx-auto min-h-screen w-full max-w-4xl p-6 sm:p-10"
+        aria-labelledby="provider-settings-loading-title"
+        aria-busy={isLoading}
+      >
+        <h1
+          id="provider-settings-loading-title"
+          className="text-3xl font-semibold tracking-tight"
+        >
           Provider settings
         </h1>
         {screenError !== undefined ? (
-          <p
+          <div
             className="mt-4 rounded-md border border-red-300 bg-red-50 p-4 text-red-900"
             role="alert"
+            aria-live="assertive"
           >
-            {screenError}
-          </p>
+            <p>{screenError}</p>
+            <button
+              type="button"
+              className="mt-4 min-h-11 rounded-md border border-slate-500 px-4 py-2 font-medium hover:bg-slate-100 focus:outline-none focus:ring-4 focus:ring-slate-400/30 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => void reloadSettings()}
+              disabled={isLoading}
+            >
+              {isLoading ? "Reloading settings…" : "Reload settings"}
+            </button>
+          </div>
         ) : (
-          <p className="mt-4" role="status">
+          <p className="mt-4" role="status" aria-live="polite">
             Loading local provider settings…
           </p>
         )}
@@ -210,8 +266,9 @@ export default function ProviderSettingsScreen({
 
   return (
     <main
-      className="mx-auto w-full max-w-4xl p-6 sm:p-10"
+      className="mx-auto min-h-screen w-full max-w-4xl p-4 sm:p-10"
       aria-labelledby="provider-settings-title"
+      aria-busy={isSubmitting || isRemovingCredential !== undefined}
     >
       <header>
         <p className="text-sm font-medium uppercase tracking-wide text-slate-600">
@@ -233,6 +290,7 @@ export default function ProviderSettingsScreen({
         <p
           className="mt-6 rounded-md border border-red-300 bg-red-50 p-4 text-red-900"
           role="alert"
+          aria-live="assertive"
         >
           {screenError}
         </p>
@@ -249,7 +307,7 @@ export default function ProviderSettingsScreen({
       ) : null}
 
       <section
-        className="mt-8 rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
+        className="mt-8 min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
         aria-labelledby="provider-form-title"
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -273,6 +331,7 @@ export default function ProviderSettingsScreen({
           <div
             className="mt-5 rounded-md border border-red-300 bg-red-50 p-4 text-red-900"
             role="alert"
+            aria-live="assertive"
             aria-labelledby="provider-form-errors"
           >
             <h3 id="provider-form-errors" className="font-semibold">
@@ -286,7 +345,14 @@ export default function ProviderSettingsScreen({
           </div>
         ) : null}
 
-        <form className="mt-6 space-y-6" onSubmit={handleSubmit} noValidate>
+        <form
+          className="mt-6 space-y-6"
+          onSubmit={handleSubmit}
+          noValidate
+          aria-describedby={
+            validationIssues.length > 0 ? "provider-form-errors" : undefined
+          }
+        >
           <fieldset className="space-y-5">
             <legend className="text-base font-semibold">
               Provider metadata
@@ -310,7 +376,13 @@ export default function ProviderSettingsScreen({
                 className="mt-2 w-full rounded-md border border-slate-400 px-3 py-2"
                 value={draft.id}
                 onChange={(event) => updateDraft("id", event.target.value)}
-                aria-describedby="provider-configuration-id-help provider-configuration-id-error"
+                required
+                aria-describedby={`provider-configuration-id-help${
+                  fieldError("id") === undefined
+                    ? ""
+                    : " provider-configuration-id-error"
+                }`}
+                aria-required="true"
                 aria-invalid={fieldError("id") !== undefined}
               />
               {fieldError("id") !== undefined ? (
@@ -341,7 +413,13 @@ export default function ProviderSettingsScreen({
                 onChange={(event) =>
                   updateDraft("providerId", event.target.value)
                 }
-                aria-describedby="provider-id-help provider-id-error"
+                required
+                aria-describedby={`provider-id-help${
+                  fieldError("providerId") === undefined
+                    ? ""
+                    : " provider-id-error"
+                }`}
+                aria-required="true"
                 aria-invalid={fieldError("providerId") !== undefined}
               />
               {fieldError("providerId") !== undefined ? (
@@ -366,7 +444,11 @@ export default function ProviderSettingsScreen({
                 className="mt-2 w-full rounded-md border border-slate-400 px-3 py-2"
                 value={draft.baseUrl}
                 onChange={(event) => updateDraft("baseUrl", event.target.value)}
-                aria-describedby="provider-base-url-help provider-base-url-error"
+                aria-describedby={`provider-base-url-help${
+                  fieldError("baseUrl") === undefined
+                    ? ""
+                    : " provider-base-url-error"
+                }`}
                 aria-invalid={fieldError("baseUrl") !== undefined}
               />
               <p
@@ -401,7 +483,11 @@ export default function ProviderSettingsScreen({
                 onChange={(event) =>
                   updateDraft("selectedModelId", event.target.value)
                 }
-                aria-describedby="provider-model-id-error"
+                aria-describedby={
+                  fieldError("selectedModelId") === undefined
+                    ? undefined
+                    : "provider-model-id-error"
+                }
                 aria-invalid={fieldError("selectedModelId") !== undefined}
               />
               {fieldError("selectedModelId") !== undefined ? (
@@ -462,7 +548,11 @@ export default function ProviderSettingsScreen({
               onChange={(event) =>
                 updateDraft("credential", event.target.value)
               }
-              aria-describedby="provider-credential-help provider-credential-error"
+              aria-describedby={`provider-credential-help${
+                fieldError("credential") === undefined
+                  ? ""
+                  : " provider-credential-error"
+              }`}
               aria-invalid={fieldError("credential") !== undefined}
             />
             {fieldError("credential") !== undefined ? (
@@ -485,16 +575,20 @@ export default function ProviderSettingsScreen({
         </form>
       </section>
 
-      <section className="mt-8" aria-labelledby="saved-providers-title">
+      <section className="mt-8 min-w-0" aria-labelledby="saved-providers-title">
         <h2 id="saved-providers-title" className="text-xl font-semibold">
           Saved providers
         </h2>
         {snapshot.settings.providers.length === 0 ? (
-          <p className="mt-3 rounded-md border border-dashed border-slate-300 p-5 text-slate-700">
+          <p
+            className="mt-3 rounded-md border border-dashed border-slate-300 p-5 text-slate-700"
+            role="status"
+            aria-live="polite"
+          >
             No provider configurations saved yet.
           </p>
         ) : (
-          <ul className="mt-4 space-y-4">
+          <ul className="mt-4 space-y-4" aria-label="Saved providers list">
             {snapshot.settings.providers.map((provider) => (
               <li
                 key={provider.id}
