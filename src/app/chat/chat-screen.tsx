@@ -2,15 +2,23 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
-import type { Character, Conversation, Message } from "@/domain/models";
+import type {
+  Character,
+  Conversation,
+  Message,
+  Persona,
+} from "@/domain/models";
 
 import {
   ChatAdapterError,
-  type ChatAdapter,
   type ChatSnapshot,
   type ChatTestDoubleMode,
 } from "./chat-adapter";
-import { createBrowserChatService } from "./browser-chat-service";
+import {
+  createBrowserChatService,
+  type BrowserChatSnapshot,
+  type PersonaAwareChatAdapter,
+} from "./browser-chat-service";
 import ChatComposer from "./chat-composer";
 import ChatFeedback from "./chat-feedback";
 import ChatLoadingState from "./chat-loading-state";
@@ -20,7 +28,7 @@ import ChatResponseControls from "./chat-response-controls";
 import ChatSetup from "./chat-setup";
 
 type ChatScreenProps = Readonly<{
-  adapter?: ChatAdapter;
+  adapter?: PersonaAwareChatAdapter;
   testDouble?: ChatTestDoubleMode;
 }>;
 
@@ -50,18 +58,26 @@ function characterById(
   return characters.find((character) => character.id === characterId);
 }
 
+function personaById(
+  personas: readonly Persona[],
+  personaId: string | undefined,
+): Persona | undefined {
+  return personas.find((persona) => persona.id === personaId);
+}
+
 export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
-  const [activeAdapter] = useState<ChatAdapter | undefined>(() => {
+  const [activeAdapter] = useState<PersonaAwareChatAdapter | undefined>(() => {
     if (adapter !== undefined || typeof window === "undefined") {
       return adapter;
     }
 
     return createBrowserChatService({ testDouble });
   });
-  const [snapshot, setSnapshot] = useState<ChatSnapshot>();
+  const [snapshot, setSnapshot] = useState<BrowserChatSnapshot>();
   const [selectedCharacterId, setSelectedCharacterId] = useState<string>();
   const [selectedConversationId, setSelectedConversationId] =
     useState<string>();
+  const [selectedPersonaId, setSelectedPersonaId] = useState<string>();
   const [messages, setMessages] = useState<readonly Message[]>([]);
   const [pendingUserMessage, setPendingUserMessage] = useState<string>();
   const [streamingText, setStreamingText] = useState("");
@@ -94,6 +110,11 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
             ? current
             : nextSnapshot.characters[0]?.id,
         );
+        const firstCharacterId = nextSnapshot.characters[0]?.id;
+        const firstConversation = nextSnapshot.conversations.find(
+          (conversation) => conversation.characterId === firstCharacterId,
+        );
+        setSelectedPersonaId(firstConversation?.personaId);
         setScreenError(undefined);
       })
       .catch((error: unknown) => {
@@ -115,6 +136,10 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
   const selectedCharacter = characterById(
     snapshot?.characters ?? [],
     selectedCharacterId,
+  );
+  const selectedPersona = personaById(
+    snapshot?.personas ?? [],
+    selectedPersonaId,
   );
   const availableConversations =
     snapshot === undefined
@@ -166,6 +191,10 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
 
     setSelectedCharacterId(characterId);
     setSelectedConversationId(undefined);
+    const firstConversation = snapshot?.conversations.find(
+      (conversation) => conversation.characterId === characterId,
+    );
+    setSelectedPersonaId(firstConversation?.personaId);
     setMessages([]);
     setLoadedConversationId(undefined);
     setScreenError(undefined);
@@ -178,8 +207,22 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
     }
 
     setSelectedConversationId(conversationId);
+    const selectedConversation = snapshot?.conversations.find(
+      (conversation) => conversation.id === conversationId,
+    );
+    setSelectedPersonaId(selectedConversation?.personaId);
     setMessages([]);
     setLoadedConversationId(undefined);
+    setScreenError(undefined);
+    setStatusMessage(undefined);
+  }
+
+  function selectPersona(personaId: string): void {
+    if (streamStatus !== "idle") {
+      return;
+    }
+
+    setSelectedPersonaId(personaId.length > 0 ? personaId : undefined);
     setScreenError(undefined);
     setStatusMessage(undefined);
   }
@@ -191,6 +234,7 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
 
     const conversation = await activeAdapter.createConversation(
       selectedCharacter.id,
+      selectedPersonaId,
     );
     setSnapshot((current) =>
       current === undefined
@@ -334,13 +378,16 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
             activeConversationId={activeConversationId}
             availableConversations={availableConversations}
             characters={snapshot.characters}
+            onSelectPersona={selectPersona}
             onCreateConversation={() => void handleCreateConversation()}
             onSelectCharacter={selectCharacter}
             onSelectConversation={selectConversation}
+            personas={snapshot.personas}
             providerLabel={snapshot.providerLabel}
             selectedCharacter={selectedCharacter}
             selectedCharacterId={selectedCharacterId}
             selectedConversationId={selectedConversationId}
+            selectedPersonaId={selectedPersona?.id}
             streamStatus={streamStatus}
           />
 

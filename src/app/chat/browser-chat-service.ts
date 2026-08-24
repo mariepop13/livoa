@@ -3,6 +3,10 @@ import {
   type CharacterApplicationService,
 } from "@/application/characters";
 import {
+  createPersonaApplicationService,
+  type PersonaApplicationService,
+} from "@/application/personas";
+import {
   createConversationApplicationService,
   type ConversationApplicationService,
   type ConversationUseCaseResult,
@@ -15,6 +19,7 @@ import type {
   Character,
   Conversation,
   Message,
+  Persona,
   ProviderConfiguration,
 } from "@/domain/models";
 import { WebStorageCredentialStore } from "@/infrastructure/credentials/web-storage-credential-store";
@@ -34,6 +39,23 @@ import {
   unwrapConversationResult,
 } from "./chat-adapter";
 import { createDeterministicTestProvider } from "./deterministic-test-provider";
+
+export type BrowserChatSnapshot = ChatSnapshot &
+  Readonly<{
+    personas: readonly Persona[];
+  }>;
+
+export type PersonaAwareChatAdapter = Omit<
+  ChatAdapter,
+  "load" | "createConversation"
+> &
+  Readonly<{
+    load(): Promise<BrowserChatSnapshot>;
+    createConversation(
+      characterId: string,
+      personaId?: string,
+    ): Promise<Conversation>;
+  }>;
 
 const contextLimits = {
   maxMessages: 50,
@@ -113,8 +135,9 @@ function chatMessages(
   ];
 }
 
-export class BrowserChatService implements ChatAdapter {
+export class BrowserChatService implements PersonaAwareChatAdapter {
   readonly #characterService: CharacterApplicationService;
+  readonly #personaService: PersonaApplicationService;
   readonly #conversationService: ConversationApplicationService;
   readonly #contextAssembler = createConversationContextAssembler();
   readonly #providerSettings: ProviderSettingsService;
@@ -126,6 +149,9 @@ export class BrowserChatService implements ChatAdapter {
     const repositories = options.repositories ?? createIndexedDbRepositories();
     this.#characterService = createCharacterApplicationService(
       repositories.characters,
+    );
+    this.#personaService = createPersonaApplicationService(
+      repositories.personas,
     );
     this.#conversationService = createConversationApplicationService(
       repositories.conversations,
@@ -140,26 +166,39 @@ export class BrowserChatService implements ChatAdapter {
     this.#testDouble = options.testDouble;
   }
 
-  public async load(): Promise<ChatSnapshot> {
-    const [charactersResult, conversations, providerLabel] = await Promise.all([
-      this.#characterService.list(),
-      this.#conversations.list(),
-      this.#loadProviderLabel(),
-    ]);
+  public async load(): Promise<BrowserChatSnapshot> {
+    const [charactersResult, personasResult, conversations, providerLabel] =
+      await Promise.all([
+        this.#characterService.list(),
+        this.#personaService.list(),
+        this.#conversations.list(),
+        this.#loadProviderLabel(),
+      ]);
 
     if (!charactersResult.ok) {
       throw getCharacterLoadError();
     }
 
+    if (!personasResult.ok) {
+      throw getPersonaLoadError();
+    }
+
     return {
       characters: charactersResult.data,
       conversations: sortConversations(conversations),
+      personas: personasResult.data,
       providerLabel,
     };
   }
 
-  public async createConversation(characterId: string): Promise<Conversation> {
-    const result = await this.#conversationService.create({ characterId });
+  public async createConversation(
+    characterId: string,
+    personaId?: string,
+  ): Promise<Conversation> {
+    const result = await this.#conversationService.create({
+      characterId,
+      personaId,
+    });
     return unwrapConversationResult(
       result,
       "The conversation could not be created.",
@@ -371,6 +410,10 @@ export class BrowserChatService implements ChatAdapter {
 
 function getCharacterLoadError(): ChatAdapterError {
   return new ChatAdapterError("Saved characters could not be loaded.");
+}
+
+function getPersonaLoadError(): ChatAdapterError {
+  return new ChatAdapterError("Saved personas could not be loaded.");
 }
 
 export function createBrowserChatService(

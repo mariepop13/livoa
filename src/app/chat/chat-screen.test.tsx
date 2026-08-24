@@ -1,20 +1,26 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { Character, Conversation, Message } from "@/domain/models";
+import type {
+  Character,
+  Conversation,
+  Message,
+  Persona,
+} from "@/domain/models";
 
 import ChatScreen from "./chat-screen";
 import type {
-  ChatAdapter,
-  ChatSnapshot,
-  ChatStreamInput,
-  ChatStreamOutcome,
-} from "./chat-adapter";
+  BrowserChatSnapshot,
+  PersonaAwareChatAdapter,
+} from "./browser-chat-service";
+import type { ChatStreamInput, ChatStreamOutcome } from "./chat-adapter";
 
 const characterId = "11111111-1111-4111-8111-111111111111";
 const conversationId = "22222222-2222-4222-8222-222222222222";
 const userMessageId = "33333333-3333-4333-8333-333333333333";
 const assistantMessageId = "44444444-4444-4444-8444-444444444444";
+const personaId = "55555555-5555-4555-8555-555555555555";
+const secondPersonaId = "66666666-6666-4666-8666-666666666666";
 const timestamp = new Date("2026-01-01T00:00:00.000Z");
 
 const character: Character = {
@@ -31,27 +37,56 @@ const character: Character = {
 const conversation: Conversation = {
   id: conversationId,
   characterId,
+  personaId,
   createdAt: timestamp,
   updatedAt: timestamp,
 };
 
-class FakeChatAdapter implements ChatAdapter {
+const persona: Persona = {
+  id: personaId,
+  name: "Ada Lovelace",
+  description: "A precise analytical thinker.",
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+
+const secondPersona: Persona = {
+  id: secondPersonaId,
+  name: "Grace Hopper",
+  description: "A practical systems thinker.",
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+
+class FakeChatAdapter implements PersonaAwareChatAdapter {
   readonly #mode: "complete" | "error";
   readonly #messages: Message[] = [];
+  public readonly createdConversationInputs: Array<{
+    characterId: string;
+    personaId: string | undefined;
+  }> = [];
 
   public constructor(mode: "complete" | "error" = "complete") {
     this.#mode = mode;
   }
 
-  public async load(): Promise<ChatSnapshot> {
+  public async load(): Promise<BrowserChatSnapshot> {
     return {
       characters: [character],
       conversations: [conversation],
+      personas: [persona, secondPersona],
       providerLabel: "Local test provider",
     };
   }
 
-  public async createConversation(): Promise<Conversation> {
+  public async createConversation(
+    characterId: string,
+    selectedPersonaId?: string,
+  ): Promise<Conversation> {
+    this.createdConversationInputs.push({
+      characterId,
+      personaId: selectedPersonaId,
+    });
     return conversation;
   }
 
@@ -113,6 +148,26 @@ describe("ChatScreen", () => {
     await screen.findByRole("status", { name: "Response complete." });
     expect(screen.getByText("A local response")).toBeVisible();
     expect(screen.getByText("Response complete.")).toBeVisible();
+  });
+
+  it("passes the selected persona when creating a conversation", async () => {
+    const adapter = new FakeChatAdapter();
+    render(<ChatScreen adapter={adapter} />);
+
+    await screen.findByRole("heading", { name: "Chat with your character." });
+    fireEvent.change(screen.getByLabelText("Persona"), {
+      target: { value: secondPersonaId },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Start conversation with Mira Vale" }),
+    );
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Conversation created.",
+    );
+    expect(adapter.createdConversationInputs).toEqual([
+      { characterId, personaId: secondPersonaId },
+    ]);
   });
 
   it("renders a safe provider error without exposing raw details", async () => {
