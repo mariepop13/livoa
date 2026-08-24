@@ -20,11 +20,20 @@ async function createCharacter(page: Page): Promise<void> {
 }
 
 async function configureLocalProvider(page: Page): Promise<void> {
+  await page.route("https://openrouter.ai/api/v1/models", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: [{ id: "local-test-model", name: "Local test model" }],
+      }),
+    });
+  });
+
   await page.goto("/providers");
   await page.getByLabel("Configuration ID").fill("local-test");
-  await page.getByLabel("Provider ID").fill("local-test-provider");
-  await page.getByLabel("Base URL").fill("http://localhost:3000/local-test");
-  await page.getByLabel("Selected model ID").fill("local-test-model");
+  const modelSelect = page.getByLabel("Selected OpenRouter model");
+  await expect(modelSelect).toBeEnabled();
+  await modelSelect.selectOption("local-test-model");
   await page.getByLabel("New BYOK credential").fill("local-test-credential");
   await page
     .getByRole("button", { name: "Save provider configuration" })
@@ -36,7 +45,7 @@ async function configureLocalProvider(page: Page): Promise<void> {
   const savedProvider = page
     .getByRole("listitem")
     .filter({ hasText: "local-test" });
-  await expect(savedProvider).toContainText("local-test-provider");
+  await expect(savedProvider).toContainText("Provider ID: openrouter");
   await expect(savedProvider).toContainText("local-test-model");
   await expect(savedProvider).toContainText("Credential: Saved and hidden");
 }
