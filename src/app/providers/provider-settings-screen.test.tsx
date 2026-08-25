@@ -24,6 +24,8 @@ import ProviderSettingsScreen from "./provider-settings-screen";
 
 class MemorySettingsRepository implements SettingsRepository {
   public settings: AppSettings | null;
+  public saveError: Error | undefined;
+  public readonly savedSettings: AppSettings[] = [];
 
   public constructor(settings: AppSettings | null = null) {
     this.settings = settings;
@@ -34,6 +36,11 @@ class MemorySettingsRepository implements SettingsRepository {
   }
 
   public async save(settings: AppSettings): Promise<void> {
+    if (this.saveError !== undefined) {
+      throw this.saveError;
+    }
+
+    this.savedSettings.push(settings);
     this.settings = settings;
   }
 }
@@ -41,6 +48,9 @@ class MemorySettingsRepository implements SettingsRepository {
 class MemoryCredentialStore implements CredentialStore {
   public readonly credentials = new Map<string, string>();
   public readonly legacyCredentials = new Map<string, string>();
+  public readonly removedReferences: CredentialReference[] = [];
+  public removeGate: Promise<void> | undefined;
+  public removeError: Error | undefined;
 
   public async has(reference: CredentialReference): Promise<boolean> {
     return this.credentials.has(reference.configurationId);
@@ -55,6 +65,13 @@ class MemoryCredentialStore implements CredentialStore {
   }
 
   public async remove(reference: CredentialReference): Promise<void> {
+    this.removedReferences.push(reference);
+    await this.removeGate;
+
+    if (this.removeError !== undefined) {
+      throw this.removeError;
+    }
+
     this.credentials.delete(reference.configurationId);
   }
 
@@ -181,6 +198,7 @@ function renderScreen(
 describe("ProviderSettingsScreen", () => {
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
   });
 
   it("exposes accessible field validation without saving invalid data", async () => {
@@ -393,6 +411,198 @@ describe("ProviderSettingsScreen", () => {
     await waitFor(() => {
       expect(screen.getByText("Credential: Not saved")).toBeVisible();
     });
+  });
+
+  it("announces cancellation without writing to either local store", async () => {
+    const settingsRepository = new MemorySettingsRepository(savedConfiguration);
+    const credentialStore = new MemoryCredentialStore();
+    credentialStore.credentials.set(
+      "openrouter-local",
+      "credential-that-must-remain-hidden",
+    );
+    const confirmDeletion = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    renderScreen(
+      new ProviderSettingsService(settingsRepository, credentialStore),
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Delete provider configuration openrouter-local",
+      }),
+    );
+
+    expect(confirmDeletion).toHaveBeenCalledWith(
+      'Permanently delete provider configuration "openrouter-local" and its saved credential from this device? This local deletion does not revoke an OpenRouter key.',
+    );
+    expect(
+      await screen.findByText(
+        "Deletion cancelled for openrouter-local. No local data was changed.",
+      ),
+    ).toHaveAttribute("role", "status");
+    expect(settingsRepository.savedSettings).toHaveLength(0);
+    expect(credentialStore.removedReferences).toHaveLength(0);
+    expect(screen.getByText("Credential: Saved and hidden")).toBeVisible();
+  });
+
+  it("exposes an accessible pending state while deletion is in progress", async () => {
+    const credentialStore = new MemoryCredentialStore();
+    credentialStore.credentials.set("openrouter-local", "hidden-secret");
+    const removal = createDeferred<void>();
+    credentialStore.removeGate = removal.promise;
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderScreen(
+      new ProviderSettingsService(
+        new MemorySettingsRepository(savedConfiguration),
+        credentialStore,
+      ),
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Delete provider configuration openrouter-local",
+      }),
+    );
+
+    expect(screen.getByRole("main")).toHaveAttribute("aria-busy", "true");
+    expect(
+      screen.getByRole("button", {
+        name: "Deleting provider configuration openrouter-local",
+      }),
+    ).toBeDisabled();
+
+    await act(async () => {
+      removal.resolve(undefined);
+      await removal.promise;
+    });
+
+    expect(
+      await screen.findByText(
+        "Provider configuration openrouter-local and its saved credential were deleted only from this device.",
+      ),
+    ).toHaveAttribute("role", "status");
+  });
+
+  it("deletes the selected local configuration, preserves its peer, and resets editing", async () => {
+    const settings: AppSettings = {
+      theme: "system",
+      providers: [
+        ...savedConfiguration.providers,
+        {
+          id: "openrouter-secondary",
+          providerId: "openrouter",
+          selectedModelId: "anthropic/claude-sonnet-4.5",
+          enabled: true,
+        },
+      ],
+    };
+    const settingsRepository = new MemorySettingsRepository(settings);
+    const credentialStore = new MemoryCredentialStore();
+    credentialStore.credentials.set("openrouter-local", "deleted-secret");
+    credentialStore.credentials.set(
+      "openrouter-secondary",
+      "credential-that-must-remain",
+    );
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderScreen(
+      new ProviderSettingsService(settingsRepository, credentialStore),
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Edit openrouter-local" }),
+    );
+    expect(
+      screen.getByRole("heading", { name: "Edit openrouter-local" }),
+    ).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Delete provider configuration openrouter-local",
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Provider configuration openrouter-local and its saved credential were deleted only from this device.",
+      ),
+    ).toHaveAttribute("role", "status");
+    expect(
+      screen.getByRole("heading", { name: "Add provider configuration" }),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Configuration ID")).toHaveValue("");
+    expect(screen.queryByText("openrouter-local")).not.toBeInTheDocument();
+    expect(screen.getByText("openrouter-secondary")).toBeVisible();
+    expect(screen.getByText("Credential: Saved and hidden")).toBeVisible();
+    expect(credentialStore.credentials.get("openrouter-secondary")).toBe(
+      "credential-that-must-remain",
+    );
+  });
+
+  it("shows a fixed safe error and keeps settings when credential removal fails", async () => {
+    const settingsRepository = new MemorySettingsRepository(savedConfiguration);
+    const credentialStore = new MemoryCredentialStore();
+    credentialStore.credentials.set("openrouter-local", "hidden-secret");
+    credentialStore.removeError = new Error("Unsafe credential detail");
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderScreen(
+      new ProviderSettingsService(settingsRepository, credentialStore),
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Delete provider configuration openrouter-local",
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        "The provider configuration could not be deleted because its local credential could not be removed.",
+      ),
+    ).toHaveAttribute("role", "alert");
+    expect(screen.getByText("openrouter-local")).toBeVisible();
+    expect(screen.getByText("Credential: Saved and hidden")).toBeVisible();
+    expect(
+      screen.queryByText("Unsafe credential detail"),
+    ).not.toBeInTheDocument();
+    expect(settingsRepository.savedSettings).toHaveLength(0);
+  });
+
+  it("refreshes the disconnected configuration after settings persistence fails", async () => {
+    const settingsRepository = new MemorySettingsRepository(savedConfiguration);
+    settingsRepository.saveError = new Error("Unsafe settings detail");
+    const credentialStore = new MemoryCredentialStore();
+    credentialStore.credentials.set("openrouter-local", "hidden-secret");
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderScreen(
+      new ProviderSettingsService(settingsRepository, credentialStore),
+    );
+
+    const deleteButton = await screen.findByRole("button", {
+      name: "Delete provider configuration openrouter-local",
+    });
+    credentialStore.legacyCredentials.set(
+      "openrouter",
+      "legacy-credential-that-must-not-migrate",
+    );
+    fireEvent.click(deleteButton);
+
+    expect(
+      await screen.findByText(
+        "The local credential was removed, but the provider configuration could not be deleted from local settings. It remains saved without a credential. Try again.",
+      ),
+    ).toHaveAttribute("role", "alert");
+    expect(screen.getByText("openrouter-local")).toBeVisible();
+    expect(screen.getByText("Credential: Needs reassignment")).toBeVisible();
+    expect(
+      screen.queryByText("Unsafe settings detail"),
+    ).not.toBeInTheDocument();
+    expect(credentialStore.credentials.has("openrouter-local")).toBe(false);
+    expect(credentialStore.legacyCredentials.get("openrouter")).toBe(
+      "legacy-credential-that-must-not-migrate",
+    );
   });
 
   it("does not show one configuration credential as saved on another", async () => {

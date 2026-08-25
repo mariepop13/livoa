@@ -131,6 +131,8 @@ export default function ProviderSettingsScreen({
   const [statusMessage, setStatusMessage] = useState<string>();
   const [screenError, setScreenError] = useState<string>();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeletingConfiguration, setIsDeletingConfiguration] =
+    useState<string>();
   const [isRemovingCredential, setIsRemovingCredential] = useState<string>();
   const [editingId, setEditingId] = useState<string>();
   const [isLoading, setIsLoading] = useState(true);
@@ -375,6 +377,63 @@ export default function ProviderSettingsScreen({
     setIsRemovingCredential(undefined);
   }
 
+  async function handleDeleteConfiguration(
+    configurationId: string,
+    providerId: string,
+  ): Promise<void> {
+    if (activeService === undefined) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Permanently delete provider configuration "${configurationId}" and its saved credential from this device? This local deletion does not revoke an OpenRouter key.`,
+    );
+
+    if (!confirmed) {
+      setScreenError(undefined);
+      setStatusMessage(
+        `Deletion cancelled for ${configurationId}. No local data was changed.`,
+      );
+      return;
+    }
+
+    setIsDeletingConfiguration(configurationId);
+    setStatusMessage(undefined);
+    setScreenError(undefined);
+
+    const result = await activeService.deleteConfiguration({
+      configurationId,
+      providerId,
+    });
+
+    if (!result.ok) {
+      const refreshedSettings = await activeService.load({
+        migrateLegacyCredentials: false,
+      });
+
+      if (refreshedSettings.ok) {
+        setSnapshot(refreshedSettings.data);
+      }
+
+      setScreenError(getErrorMessage(result.error));
+      setIsDeletingConfiguration(undefined);
+      return;
+    }
+
+    setSnapshot(result.data);
+
+    if (editingId === configurationId) {
+      setEditingId(undefined);
+      setDraft(createOpenRouterDraft());
+      setValidationIssues([]);
+    }
+
+    setStatusMessage(
+      `Provider configuration ${configurationId} and its saved credential were deleted only from this device.`,
+    );
+    setIsDeletingConfiguration(undefined);
+  }
+
   function fieldError(
     field: ProviderConfigurationValidationIssue["field"],
   ): string | undefined {
@@ -452,7 +511,11 @@ export default function ProviderSettingsScreen({
     <main
       className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100 sm:px-6 lg:px-10"
       aria-labelledby="provider-settings-title"
-      aria-busy={isSubmitting || isRemovingCredential !== undefined}
+      aria-busy={
+        isSubmitting ||
+        isDeletingConfiguration !== undefined ||
+        isRemovingCredential !== undefined
+      }
     >
       <header className="mx-auto max-w-5xl rounded-3xl border border-slate-800 bg-gradient-to-br from-indigo-950 via-slate-900 to-cyan-950 px-6 py-8 shadow-2xl shadow-slate-950/40 sm:px-10 sm:py-11">
         <p className="text-xs font-bold uppercase tracking-[0.22em] text-cyan-300">
@@ -817,6 +880,11 @@ export default function ProviderSettingsScreen({
                           credential again to assign it only there.
                         </p>
                       ) : null}
+                      <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">
+                        Deleting this configuration removes it and its saved
+                        credential only from this device. It does not revoke an
+                        OpenRouter key.
+                      </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <button
@@ -844,6 +912,26 @@ export default function ProviderSettingsScreen({
                             : "Remove saved credential"}
                         </button>
                       ) : null}
+                      <button
+                        type="button"
+                        className={`${secondaryButtonClassName} border-rose-400/50 text-rose-200 hover:border-rose-300 hover:bg-rose-950/40`}
+                        onClick={() =>
+                          void handleDeleteConfiguration(
+                            provider.id,
+                            provider.providerId,
+                          )
+                        }
+                        disabled={isDeletingConfiguration !== undefined}
+                        aria-label={
+                          isDeletingConfiguration === provider.id
+                            ? `Deleting provider configuration ${provider.id}`
+                            : `Delete provider configuration ${provider.id}`
+                        }
+                      >
+                        {isDeletingConfiguration === provider.id
+                          ? "Deleting…"
+                          : "Delete provider configuration"}
+                      </button>
                     </div>
                   </div>
                 </li>

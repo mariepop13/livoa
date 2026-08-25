@@ -6,6 +6,7 @@ import type {
   CredentialStore,
   SettingsRepository,
 } from "@/domain/ports";
+import { ApplicationError } from "@/application/error";
 import {
   ProviderSettingsService,
   isProviderSettingsValidationError,
@@ -14,6 +15,7 @@ import {
 class MemorySettingsRepository implements SettingsRepository {
   public settings: AppSettings | null;
   public readonly savedSettings: AppSettings[] = [];
+  public saveError: Error | undefined;
 
   public constructor(settings: AppSettings | null = null) {
     this.settings = settings;
@@ -24,6 +26,10 @@ class MemorySettingsRepository implements SettingsRepository {
   }
 
   public async save(settings: AppSettings): Promise<void> {
+    if (this.saveError !== undefined) {
+      throw this.saveError;
+    }
+
     this.savedSettings.push(settings);
     this.settings = settings;
   }
@@ -36,6 +42,7 @@ class MemoryCredentialStore implements CredentialStore {
     readonly [CredentialReference, string]
   > = [];
   public readonly removedReferences: CredentialReference[] = [];
+  public removeError: Error | undefined;
   public saveError: Error | undefined;
 
   public async has(reference: CredentialReference): Promise<boolean> {
@@ -57,6 +64,11 @@ class MemoryCredentialStore implements CredentialStore {
 
   public async remove(reference: CredentialReference): Promise<void> {
     this.removedReferences.push(reference);
+
+    if (this.removeError !== undefined) {
+      throw this.removeError;
+    }
+
     this.credentials.delete(reference.configurationId);
   }
 
@@ -265,6 +277,183 @@ describe("ProviderSettingsService", () => {
     expect(result.data.credentialStatus).toEqual({
       [providerInput.id]: false,
     });
+  });
+
+  it("deletes only the exact configuration and its credential", async () => {
+    const secondConfigurationId = "openrouter-secondary";
+    const settingsRepository = new MemorySettingsRepository({
+      theme: "system",
+      providers: [
+        {
+          id: providerInput.id,
+          providerId: providerInput.providerId,
+          enabled: true,
+        },
+        {
+          id: secondConfigurationId,
+          providerId: providerInput.providerId,
+          enabled: true,
+        },
+      ],
+    });
+    const credentialStore = new MemoryCredentialStore();
+    credentialStore.credentials.set(providerInput.id, providerInput.credential);
+    credentialStore.credentials.set(
+      secondConfigurationId,
+      "credential-that-must-remain",
+    );
+    const service = new ProviderSettingsService(
+      settingsRepository,
+      credentialStore,
+    );
+
+    const result = await service.deleteConfiguration({
+      configurationId: providerInput.id,
+      providerId: providerInput.providerId,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(credentialStore.removedReferences).toEqual([
+      {
+        configurationId: providerInput.id,
+        providerId: providerInput.providerId,
+      },
+    ]);
+    expect(credentialStore.credentials.has(providerInput.id)).toBe(false);
+    expect(credentialStore.credentials.get(secondConfigurationId)).toBe(
+      "credential-that-must-remain",
+    );
+    expect(settingsRepository.settings?.providers).toEqual([
+      {
+        id: secondConfigurationId,
+        providerId: providerInput.providerId,
+        enabled: true,
+      },
+    ]);
+    if (!result.ok) {
+      throw new Error("Expected provider configuration deletion to succeed.");
+    }
+    expect(result.data.credentialStatus).toEqual({
+      [secondConfigurationId]: true,
+    });
+  });
+
+  it("validates a deletion reference before touching either store", async () => {
+    const settingsRepository = new MemorySettingsRepository({
+      theme: "system",
+      providers: [
+        {
+          id: providerInput.id,
+          providerId: providerInput.providerId,
+          enabled: true,
+        },
+      ],
+    });
+    const credentialStore = new MemoryCredentialStore();
+    const service = new ProviderSettingsService(
+      settingsRepository,
+      credentialStore,
+    );
+
+    const result = await service.deleteConfiguration({
+      configurationId: " ",
+      providerId: providerInput.providerId,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(settingsRepository.savedSettings).toHaveLength(0);
+    expect(credentialStore.removedReferences).toHaveLength(0);
+  });
+
+  it("leaves settings unchanged when credential removal fails", async () => {
+    const originalSettings: AppSettings = {
+      theme: "system",
+      providers: [
+        {
+          id: providerInput.id,
+          providerId: providerInput.providerId,
+          enabled: true,
+        },
+      ],
+    };
+    const settingsRepository = new MemorySettingsRepository(originalSettings);
+    const credentialStore = new MemoryCredentialStore();
+    credentialStore.credentials.set(providerInput.id, providerInput.credential);
+    credentialStore.removeError = new Error(
+      `Unsafe credential failure ${providerInput.credential}`,
+    );
+    const service = new ProviderSettingsService(
+      settingsRepository,
+      credentialStore,
+    );
+
+    const result = await service.deleteConfiguration({
+      configurationId: providerInput.id,
+      providerId: providerInput.providerId,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("Expected credential removal to fail.");
+    }
+    expect(result.error.message).toBe(
+      "The provider configuration could not be deleted because its local credential could not be removed.",
+    );
+    expect(result.error.message).not.toContain(providerInput.credential);
+    expect(settingsRepository.settings).toEqual(originalSettings);
+    expect(settingsRepository.savedSettings).toHaveLength(0);
+    expect(credentialStore.credentials.get(providerInput.id)).toBe(
+      providerInput.credential,
+    );
+  });
+
+  it("keeps the configuration disconnected with a retriable safe failure when settings persistence fails", async () => {
+    const originalSettings: AppSettings = {
+      theme: "system",
+      providers: [
+        {
+          id: providerInput.id,
+          providerId: providerInput.providerId,
+          enabled: true,
+        },
+      ],
+    };
+    const settingsRepository = new MemorySettingsRepository(originalSettings);
+    settingsRepository.saveError = new Error("Unsafe settings detail");
+    const credentialStore = new MemoryCredentialStore();
+    credentialStore.credentials.set(providerInput.id, providerInput.credential);
+    credentialStore.legacyCredentials.set(
+      providerInput.providerId,
+      "legacy-credential-that-must-not-migrate",
+    );
+    const service = new ProviderSettingsService(
+      settingsRepository,
+      credentialStore,
+    );
+
+    const result = await service.deleteConfiguration({
+      configurationId: providerInput.id,
+      providerId: providerInput.providerId,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("Expected settings persistence to fail.");
+    }
+    expect(result.error.message).toBe(
+      "The local credential was removed, but the provider configuration could not be deleted from local settings. It remains saved without a credential. Try again.",
+    );
+    expect(result.error).toBeInstanceOf(ApplicationError);
+    if (!(result.error instanceof ApplicationError)) {
+      throw new Error("Expected a retriable application error.");
+    }
+    expect(result.error.retryable).toBe(true);
+    expect(settingsRepository.settings).toEqual(originalSettings);
+    expect(credentialStore.credentials.has(providerInput.id)).toBe(false);
+    expect(credentialStore.savedCredentials).toHaveLength(0);
+    expect(
+      credentialStore.legacyCredentials.get(providerInput.providerId),
+    ).toBe("legacy-credential-that-must-not-migrate");
   });
 
   it("migrates a legacy credential when only one configuration uses the provider", async () => {
