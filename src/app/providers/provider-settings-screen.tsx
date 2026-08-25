@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import {
   isProviderSettingsValidationError,
@@ -10,10 +10,18 @@ import {
 } from "@/application/providers/provider-settings";
 import type { ProviderModelDiscoveryService } from "@/application/providers/provider-model-discovery";
 import {
+  OpenRouterOAuthService,
+  type OpenRouterOAuthCallbackValues,
+} from "@/application/providers/oauth/openrouter-oauth";
+import {
+  createBrowserOpenRouterOAuthService,
   createBrowserProviderModelDiscoveryService,
   createBrowserProviderSettingsService,
   openRouterConfigurationDefaults,
 } from "./browser-provider-settings";
+import OpenRouterOAuthSection, {
+  type OpenRouterOAuthUiState,
+} from "./openrouter-oauth-section";
 import ProviderModelSelect from "./provider-model-select";
 import { useProviderModelDiscovery } from "./use-provider-model-discovery";
 
@@ -28,6 +36,7 @@ type ProviderDraft = {
 
 type ProviderSettingsScreenProps = Readonly<{
   modelDiscoveryService?: ProviderModelDiscoveryService;
+  oauthService?: OpenRouterOAuthService;
   service?: ProviderSettingsService;
 }>;
 
@@ -69,8 +78,16 @@ function getErrorMessage(error: unknown): string {
     : "Provider settings could not be loaded. Try again.";
 }
 
+function hasOpenRouterOAuthCallback(location: string): boolean {
+  const url = new URL(location);
+  return ["code", "error", "state"].some((parameter) =>
+    url.searchParams.has(parameter),
+  );
+}
+
 export default function ProviderSettingsScreen({
   modelDiscoveryService,
+  oauthService,
   service,
 }: ProviderSettingsScreenProps) {
   const [activeService] = useState<ProviderSettingsService | undefined>(() => {
@@ -93,6 +110,19 @@ export default function ProviderSettingsScreen({
 
     return createBrowserProviderModelDiscoveryService();
   });
+  const [activeOAuthService] = useState<OpenRouterOAuthService | undefined>(
+    () => {
+      if (
+        oauthService !== undefined ||
+        service !== undefined ||
+        typeof window === "undefined"
+      ) {
+        return oauthService;
+      }
+
+      return createBrowserOpenRouterOAuthService();
+    },
+  );
   const [snapshot, setSnapshot] = useState<ProviderSettingsSnapshot>();
   const [draft, setDraft] = useState<ProviderDraft>(createOpenRouterDraft);
   const [validationIssues, setValidationIssues] = useState<
@@ -104,6 +134,13 @@ export default function ProviderSettingsScreen({
   const [isRemovingCredential, setIsRemovingCredential] = useState<string>();
   const [editingId, setEditingId] = useState<string>();
   const [isLoading, setIsLoading] = useState(true);
+  const [oauthState, setOAuthState] = useState<OpenRouterOAuthUiState>(() =>
+    typeof window !== "undefined" &&
+    hasOpenRouterOAuthCallback(window.location.href)
+      ? { status: "exchanging" }
+      : { status: "idle" },
+  );
+  const oauthCallbackHandled = useRef(false);
   const modelDiscovery = useProviderModelDiscovery(activeModelDiscoveryService);
 
   useEffect(() => {
@@ -143,6 +180,63 @@ export default function ProviderSettingsScreen({
       isCurrent = false;
     };
   }, [activeService]);
+
+  useEffect(() => {
+    if (
+      activeOAuthService === undefined ||
+      activeService === undefined ||
+      typeof window === "undefined" ||
+      oauthCallbackHandled.current
+    ) {
+      return;
+    }
+
+    const callbackUrl = new URL(window.location.href);
+
+    if (!hasOpenRouterOAuthCallback(callbackUrl.href)) {
+      return;
+    }
+
+    oauthCallbackHandled.current = true;
+    const callbackValues: OpenRouterOAuthCallbackValues = {
+      code: callbackUrl.searchParams.getAll("code"),
+      error: callbackUrl.searchParams.getAll("error"),
+      state: callbackUrl.searchParams.getAll("state"),
+    };
+
+    for (const parameter of ["code", "error", "error_description", "state"]) {
+      callbackUrl.searchParams.delete(parameter);
+    }
+
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${callbackUrl.pathname}${callbackUrl.search}${callbackUrl.hash}`,
+    );
+
+    void activeOAuthService.complete(callbackValues).then(async (result) => {
+      if (!result.ok) {
+        setOAuthState({
+          status: result.error.code === "cancelled" ? "cancelled" : "error",
+          message: result.error.message,
+        });
+        return;
+      }
+
+      const refreshedSettings = await activeService.load();
+
+      if (refreshedSettings.ok) {
+        setSnapshot(refreshedSettings.data);
+      } else {
+        setScreenError(getErrorMessage(refreshedSettings.error));
+      }
+
+      setOAuthState({
+        status: "success",
+        message: `OpenRouter connected for ${result.data.configurationId}. The credential is saved and hidden.`,
+      });
+    });
+  }, [activeOAuthService, activeService]);
 
   function updateDraft<Key extends keyof ProviderDraft>(
     key: Key,
@@ -205,6 +299,52 @@ export default function ProviderSettingsScreen({
     setEditingId(undefined);
     setStatusMessage("Provider configuration saved.");
     setIsSubmitting(false);
+  }
+
+  async function handleConnectOpenRouter(): Promise<void> {
+    if (activeOAuthService === undefined || activeService === undefined) {
+      return;
+    }
+
+    setOAuthState({ status: "connecting" });
+    setValidationIssues([]);
+    setStatusMessage(undefined);
+    setScreenError(undefined);
+
+    const savedConfiguration = await activeService.save({
+      ...draft,
+      credential: "",
+    });
+
+    if (!savedConfiguration.ok) {
+      if (isProviderSettingsValidationError(savedConfiguration.error)) {
+        setValidationIssues(savedConfiguration.error.issues);
+        setOAuthState({ status: "idle" });
+      } else {
+        setScreenError(getErrorMessage(savedConfiguration.error));
+        setOAuthState({
+          status: "error",
+          message: savedConfiguration.error.message,
+        });
+      }
+      return;
+    }
+
+    setSnapshot(savedConfiguration.data);
+    const authorization = await activeOAuthService.begin({
+      configurationId: draft.id,
+      providerId: draft.providerId,
+    });
+
+    if (!authorization.ok) {
+      setOAuthState({
+        status: "error",
+        message: authorization.error.message,
+      });
+      return;
+    }
+
+    window.location.assign(authorization.data.authorizationUrl);
   }
 
   async function handleRemoveCredential(
@@ -554,6 +694,11 @@ export default function ProviderSettingsScreen({
               </div>
             </div>
           </fieldset>
+
+          <OpenRouterOAuthSection
+            state={oauthState}
+            onConnect={() => void handleConnectOpenRouter()}
+          />
 
           <fieldset className="space-y-3 border-t border-slate-800 pt-6">
             <legend className="text-base font-bold text-white">
