@@ -131,6 +131,8 @@ export default function ProviderSettingsScreen({
   const [statusMessage, setStatusMessage] = useState<string>();
   const [screenError, setScreenError] = useState<string>();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeletingConfiguration, setIsDeletingConfiguration] =
+    useState<string>();
   const [isRemovingCredential, setIsRemovingCredential] = useState<string>();
   const [editingId, setEditingId] = useState<string>();
   const [isLoading, setIsLoading] = useState(true);
@@ -141,7 +143,14 @@ export default function ProviderSettingsScreen({
       : { status: "idle" },
   );
   const oauthCallbackHandled = useRef(false);
+  const savedProvidersHeadingRef = useRef<HTMLHeadingElement>(null);
   const modelDiscovery = useProviderModelDiscovery(activeModelDiscoveryService);
+  const isProviderMutationPending =
+    isSubmitting ||
+    isDeletingConfiguration !== undefined ||
+    isRemovingCredential !== undefined ||
+    oauthState.status === "connecting" ||
+    oauthState.status === "exchanging";
 
   useEffect(() => {
     if (activeService === undefined) {
@@ -248,6 +257,10 @@ export default function ProviderSettingsScreen({
   }
 
   function startNewConfiguration(): void {
+    if (isProviderMutationPending) {
+      return;
+    }
+
     setEditingId(undefined);
     setDraft(createOpenRouterDraft());
     setValidationIssues([]);
@@ -255,6 +268,10 @@ export default function ProviderSettingsScreen({
   }
 
   function startEditing(providerId: string): void {
+    if (isProviderMutationPending) {
+      return;
+    }
+
     const provider = snapshot?.settings.providers.find(
       (candidate) => candidate.id === providerId,
     );
@@ -272,7 +289,7 @@ export default function ProviderSettingsScreen({
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (activeService === undefined) {
+    if (activeService === undefined || isProviderMutationPending) {
       return;
     }
 
@@ -302,7 +319,11 @@ export default function ProviderSettingsScreen({
   }
 
   async function handleConnectOpenRouter(): Promise<void> {
-    if (activeOAuthService === undefined || activeService === undefined) {
+    if (
+      activeOAuthService === undefined ||
+      activeService === undefined ||
+      isProviderMutationPending
+    ) {
       return;
     }
 
@@ -351,7 +372,7 @@ export default function ProviderSettingsScreen({
     configurationId: string,
     providerId: string,
   ) {
-    if (activeService === undefined) {
+    if (activeService === undefined || isProviderMutationPending) {
       return;
     }
 
@@ -373,6 +394,64 @@ export default function ProviderSettingsScreen({
     setSnapshot(result.data);
     setStatusMessage("Saved credential removed.");
     setIsRemovingCredential(undefined);
+  }
+
+  async function handleDeleteConfiguration(
+    configurationId: string,
+    providerId: string,
+  ): Promise<void> {
+    if (activeService === undefined || isProviderMutationPending) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Permanently delete provider configuration "${configurationId}" and its saved credential from this device? This local deletion does not revoke an OpenRouter key.`,
+    );
+
+    if (!confirmed) {
+      setScreenError(undefined);
+      setStatusMessage(
+        `Deletion cancelled for ${configurationId}. No local data was changed.`,
+      );
+      return;
+    }
+
+    setIsDeletingConfiguration(configurationId);
+    setStatusMessage(undefined);
+    setScreenError(undefined);
+
+    const result = await activeService.deleteConfiguration({
+      configurationId,
+      providerId,
+    });
+
+    if (!result.ok) {
+      const refreshedSettings = await activeService.load({
+        migrateLegacyCredentials: false,
+      });
+
+      if (refreshedSettings.ok) {
+        setSnapshot(refreshedSettings.data);
+      }
+
+      setScreenError(getErrorMessage(result.error));
+      setIsDeletingConfiguration(undefined);
+      return;
+    }
+
+    setSnapshot(result.data);
+
+    if (editingId === configurationId) {
+      setEditingId(undefined);
+      setDraft(createOpenRouterDraft());
+      setValidationIssues([]);
+    }
+
+    savedProvidersHeadingRef.current?.focus();
+    setStatusMessage(
+      `Provider configuration ${configurationId} and its saved credential were deleted only from this device.`,
+    );
+    setIsDeletingConfiguration(undefined);
   }
 
   function fieldError(
@@ -452,7 +531,7 @@ export default function ProviderSettingsScreen({
     <main
       className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100 sm:px-6 lg:px-10"
       aria-labelledby="provider-settings-title"
-      aria-busy={isSubmitting || isRemovingCredential !== undefined}
+      aria-busy={isProviderMutationPending}
     >
       <header className="mx-auto max-w-5xl rounded-3xl border border-slate-800 bg-gradient-to-br from-indigo-950 via-slate-900 to-cyan-950 px-6 py-8 shadow-2xl shadow-slate-950/40 sm:px-10 sm:py-11">
         <p className="text-xs font-bold uppercase tracking-[0.22em] text-cyan-300">
@@ -508,6 +587,7 @@ export default function ProviderSettingsScreen({
               type="button"
               className={secondaryButtonClassName}
               onClick={startNewConfiguration}
+              disabled={isProviderMutationPending}
             >
               Add another provider
             </button>
@@ -540,217 +620,216 @@ export default function ProviderSettingsScreen({
             validationIssues.length > 0 ? "provider-form-errors" : undefined
           }
         >
-          <fieldset className="space-y-5">
-            <legend className="text-base font-bold text-white">
-              Provider metadata
-            </legend>
-            <div>
-              <label
-                className="block text-sm font-semibold text-slate-100"
-                htmlFor="provider-configuration-id"
-              >
-                Configuration ID
-              </label>
-              <p
-                id="provider-configuration-id-help"
-                className="mt-1 text-sm leading-6 text-slate-400"
-              >
-                A local name used to identify this configuration.
-              </p>
-              <input
-                id="provider-configuration-id"
-                name="id"
-                className={fieldClassName}
-                value={draft.id}
-                onChange={(event) => updateDraft("id", event.target.value)}
-                required
-                aria-describedby={`provider-configuration-id-help${
-                  fieldError("id") === undefined
-                    ? ""
-                    : " provider-configuration-id-error"
-                }`}
-                aria-required="true"
-                aria-invalid={fieldError("id") !== undefined}
-              />
-              {fieldError("id") !== undefined ? (
-                <p
-                  id="provider-configuration-id-error"
-                  className="mt-1 text-sm font-medium text-rose-300"
-                >
-                  {fieldError("id")}
-                </p>
-              ) : null}
-            </div>
-
-            <div>
-              <label
-                className="block text-sm font-semibold text-slate-100"
-                htmlFor="provider-id"
-              >
-                Provider ID
-              </label>
-              <p
-                id="provider-id-help"
-                className="mt-1 text-sm leading-6 text-slate-400"
-              >
-                OpenRouter uses the existing OpenAI-compatible adapter.
-              </p>
-              <input
-                id="provider-id"
-                name="providerId"
-                className={fieldClassName}
-                value={draft.providerId}
-                readOnly
-                required
-                aria-describedby={`provider-id-help${
-                  fieldError("providerId") === undefined
-                    ? ""
-                    : " provider-id-error"
-                }`}
-                aria-required="true"
-                aria-invalid={fieldError("providerId") !== undefined}
-              />
-              {fieldError("providerId") !== undefined ? (
-                <p
-                  id="provider-id-error"
-                  className="mt-1 text-sm font-medium text-rose-300"
-                >
-                  {fieldError("providerId")}
-                </p>
-              ) : null}
-            </div>
-
-            <div>
-              <label
-                className="block text-sm font-semibold text-slate-100"
-                htmlFor="provider-base-url"
-              >
-                OpenRouter base URL
-              </label>
-              <input
-                id="provider-base-url"
-                name="baseUrl"
-                type="url"
-                className={fieldClassName}
-                value={draft.baseUrl}
-                readOnly
-                aria-describedby={`provider-base-url-help${
-                  fieldError("baseUrl") === undefined
-                    ? ""
-                    : " provider-base-url-error"
-                }`}
-                aria-invalid={fieldError("baseUrl") !== undefined}
-              />
-              <p
-                id="provider-base-url-help"
-                className="mt-1 text-sm leading-6 text-slate-400"
-              >
-                Model discovery uses OpenRouter&apos;s public API. Credentials
-                are never placed in this URL.
-              </p>
-              {fieldError("baseUrl") !== undefined ? (
-                <p
-                  id="provider-base-url-error"
-                  className="mt-1 text-sm font-medium text-rose-300"
-                >
-                  {fieldError("baseUrl")}
-                </p>
-              ) : null}
-            </div>
-
-            <ProviderModelSelect
-              error={fieldError("selectedModelId")}
-              selectedModelId={draft.selectedModelId}
-              state={modelDiscovery.state}
-              onChange={(modelId) => updateDraft("selectedModelId", modelId)}
-              onRefresh={() => void modelDiscovery.refresh()}
-            />
-
-            <div className="flex items-start gap-3">
-              <input
-                id="provider-enabled"
-                name="enabled"
-                type="checkbox"
-                className="mt-1 h-4 w-4 accent-cyan-300"
-                checked={draft.enabled}
-                onChange={(event) =>
-                  updateDraft("enabled", event.target.checked)
-                }
-                aria-describedby="provider-enabled-help"
-              />
+          <fieldset className="contents" disabled={isProviderMutationPending}>
+            <legend className="sr-only">Provider configuration controls</legend>
+            <fieldset className="space-y-5">
+              <legend className="text-base font-bold text-white">
+                Provider metadata
+              </legend>
               <div>
                 <label
-                  className="font-semibold text-slate-100"
-                  htmlFor="provider-enabled"
+                  className="block text-sm font-semibold text-slate-100"
+                  htmlFor="provider-configuration-id"
                 >
-                  Enabled
+                  Configuration ID
                 </label>
                 <p
-                  id="provider-enabled-help"
-                  className="text-sm leading-6 text-slate-400"
+                  id="provider-configuration-id-help"
+                  className="mt-1 text-sm leading-6 text-slate-400"
                 >
-                  Allow this provider to be used for future conversations.
+                  A local name used to identify this configuration.
                 </p>
+                <input
+                  id="provider-configuration-id"
+                  name="id"
+                  className={fieldClassName}
+                  value={draft.id}
+                  onChange={(event) => updateDraft("id", event.target.value)}
+                  required
+                  aria-describedby={`provider-configuration-id-help${
+                    fieldError("id") === undefined
+                      ? ""
+                      : " provider-configuration-id-error"
+                  }`}
+                  aria-required="true"
+                  aria-invalid={fieldError("id") !== undefined}
+                />
+                {fieldError("id") !== undefined ? (
+                  <p
+                    id="provider-configuration-id-error"
+                    className="mt-1 text-sm font-medium text-rose-300"
+                  >
+                    {fieldError("id")}
+                  </p>
+                ) : null}
               </div>
-            </div>
-          </fieldset>
 
-          <OpenRouterOAuthSection
-            state={oauthState}
-            onConnect={() => void handleConnectOpenRouter()}
-          />
+              <div>
+                <label
+                  className="block text-sm font-semibold text-slate-100"
+                  htmlFor="provider-id"
+                >
+                  Provider ID
+                </label>
+                <p
+                  id="provider-id-help"
+                  className="mt-1 text-sm leading-6 text-slate-400"
+                >
+                  OpenRouter uses the existing OpenAI-compatible adapter.
+                </p>
+                <input
+                  id="provider-id"
+                  name="providerId"
+                  className={fieldClassName}
+                  value={draft.providerId}
+                  readOnly
+                  required
+                  aria-describedby={`provider-id-help${
+                    fieldError("providerId") === undefined
+                      ? ""
+                      : " provider-id-error"
+                  }`}
+                  aria-required="true"
+                  aria-invalid={fieldError("providerId") !== undefined}
+                />
+                {fieldError("providerId") !== undefined ? (
+                  <p
+                    id="provider-id-error"
+                    className="mt-1 text-sm font-medium text-rose-300"
+                  >
+                    {fieldError("providerId")}
+                  </p>
+                ) : null}
+              </div>
 
-          <fieldset className="space-y-3 border-t border-slate-800 pt-6">
-            <legend className="text-base font-bold text-white">
-              BYOK credential
-            </legend>
-            <p
-              id="provider-credential-help"
-              className="text-sm leading-6 text-slate-400"
-            >
-              Required for chat. The credential is stored separately and will
-              never be shown again. Public model discovery does not use it.
-            </p>
-            <label
-              className="block text-sm font-semibold text-slate-100"
-              htmlFor="provider-credential"
-            >
-              New BYOK credential
-            </label>
-            <input
-              id="provider-credential"
-              name="credential"
-              type="password"
-              autoComplete="new-password"
-              className={fieldClassName}
-              value={draft.credential}
-              onChange={(event) =>
-                updateDraft("credential", event.target.value)
-              }
-              aria-describedby={`provider-credential-help${
-                fieldError("credential") === undefined
-                  ? ""
-                  : " provider-credential-error"
-              }`}
-              aria-invalid={fieldError("credential") !== undefined}
+              <div>
+                <label
+                  className="block text-sm font-semibold text-slate-100"
+                  htmlFor="provider-base-url"
+                >
+                  OpenRouter base URL
+                </label>
+                <input
+                  id="provider-base-url"
+                  name="baseUrl"
+                  type="url"
+                  className={fieldClassName}
+                  value={draft.baseUrl}
+                  readOnly
+                  aria-describedby={`provider-base-url-help${
+                    fieldError("baseUrl") === undefined
+                      ? ""
+                      : " provider-base-url-error"
+                  }`}
+                  aria-invalid={fieldError("baseUrl") !== undefined}
+                />
+                <p
+                  id="provider-base-url-help"
+                  className="mt-1 text-sm leading-6 text-slate-400"
+                >
+                  Model discovery uses OpenRouter&apos;s public API. Credentials
+                  are never placed in this URL.
+                </p>
+                {fieldError("baseUrl") !== undefined ? (
+                  <p
+                    id="provider-base-url-error"
+                    className="mt-1 text-sm font-medium text-rose-300"
+                  >
+                    {fieldError("baseUrl")}
+                  </p>
+                ) : null}
+              </div>
+
+              <ProviderModelSelect
+                error={fieldError("selectedModelId")}
+                selectedModelId={draft.selectedModelId}
+                state={modelDiscovery.state}
+                onChange={(modelId) => updateDraft("selectedModelId", modelId)}
+                onRefresh={() => void modelDiscovery.refresh()}
+              />
+
+              <div className="flex items-start gap-3">
+                <input
+                  id="provider-enabled"
+                  name="enabled"
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 accent-cyan-300"
+                  checked={draft.enabled}
+                  onChange={(event) =>
+                    updateDraft("enabled", event.target.checked)
+                  }
+                  aria-describedby="provider-enabled-help"
+                />
+                <div>
+                  <label
+                    className="font-semibold text-slate-100"
+                    htmlFor="provider-enabled"
+                  >
+                    Enabled
+                  </label>
+                  <p
+                    id="provider-enabled-help"
+                    className="text-sm leading-6 text-slate-400"
+                  >
+                    Allow this provider to be used for future conversations.
+                  </p>
+                </div>
+              </div>
+            </fieldset>
+
+            <OpenRouterOAuthSection
+              state={oauthState}
+              onConnect={() => void handleConnectOpenRouter()}
             />
-            {fieldError("credential") !== undefined ? (
-              <p
-                id="provider-credential-error"
-                className="text-sm font-medium text-rose-300"
-              >
-                {fieldError("credential")}
-              </p>
-            ) : null}
-          </fieldset>
 
-          <button
-            type="submit"
-            className={primaryButtonClassName}
-            disabled={isSubmitting}
-          >
-            {isSubmitting ? "Saving…" : "Save provider configuration"}
-          </button>
+            <fieldset className="space-y-3 border-t border-slate-800 pt-6">
+              <legend className="text-base font-bold text-white">
+                BYOK credential
+              </legend>
+              <p
+                id="provider-credential-help"
+                className="text-sm leading-6 text-slate-400"
+              >
+                Required for chat. The credential is stored separately and will
+                never be shown again. Public model discovery does not use it.
+              </p>
+              <label
+                className="block text-sm font-semibold text-slate-100"
+                htmlFor="provider-credential"
+              >
+                New BYOK credential
+              </label>
+              <input
+                id="provider-credential"
+                name="credential"
+                type="password"
+                autoComplete="new-password"
+                className={fieldClassName}
+                value={draft.credential}
+                onChange={(event) =>
+                  updateDraft("credential", event.target.value)
+                }
+                aria-describedby={`provider-credential-help${
+                  fieldError("credential") === undefined
+                    ? ""
+                    : " provider-credential-error"
+                }`}
+                aria-invalid={fieldError("credential") !== undefined}
+              />
+              {fieldError("credential") !== undefined ? (
+                <p
+                  id="provider-credential-error"
+                  className="text-sm font-medium text-rose-300"
+                >
+                  {fieldError("credential")}
+                </p>
+              ) : null}
+            </fieldset>
+
+            <button type="submit" className={primaryButtonClassName}>
+              {isSubmitting ? "Saving…" : "Save provider configuration"}
+            </button>
+          </fieldset>
         </form>
       </section>
 
@@ -760,6 +839,8 @@ export default function ProviderSettingsScreen({
       >
         <h2
           id="saved-providers-title"
+          ref={savedProvidersHeadingRef}
+          tabIndex={-1}
           className="text-2xl font-bold tracking-tight text-white"
         >
           Saved providers
@@ -785,7 +866,7 @@ export default function ProviderSettingsScreen({
                   key={provider.id}
                   className="rounded-2xl border border-slate-800 bg-slate-900/85 p-5 shadow-xl shadow-slate-950/20"
                 >
-                  <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
                     <div>
                       <h3 className="text-lg font-bold text-white">
                         {provider.id}
@@ -817,12 +898,22 @@ export default function ProviderSettingsScreen({
                           credential again to assign it only there.
                         </p>
                       ) : null}
+                      <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">
+                        Deleting this configuration removes it and its saved
+                        credential only from this device. It does not revoke an
+                        OpenRouter key.
+                      </p>
                     </div>
-                    <div className="flex flex-wrap gap-2">
+                    <div
+                      className="mt-4 flex flex-wrap gap-2"
+                      role="group"
+                      aria-label={`Provider configuration actions for ${provider.id}`}
+                    >
                       <button
                         type="button"
                         className={secondaryButtonClassName}
                         onClick={() => startEditing(provider.id)}
+                        disabled={isProviderMutationPending}
                       >
                         Edit {provider.id}
                       </button>
@@ -836,7 +927,7 @@ export default function ProviderSettingsScreen({
                               provider.providerId,
                             )
                           }
-                          disabled={isRemovingCredential === provider.id}
+                          disabled={isProviderMutationPending}
                           aria-label={`Remove saved credential for ${provider.id}`}
                         >
                           {isRemovingCredential === provider.id
@@ -844,6 +935,26 @@ export default function ProviderSettingsScreen({
                             : "Remove saved credential"}
                         </button>
                       ) : null}
+                      <button
+                        type="button"
+                        className={`${secondaryButtonClassName} border-rose-400/50 text-rose-200 hover:border-rose-300 hover:bg-rose-950/40`}
+                        onClick={() =>
+                          void handleDeleteConfiguration(
+                            provider.id,
+                            provider.providerId,
+                          )
+                        }
+                        disabled={isProviderMutationPending}
+                        aria-label={
+                          isDeletingConfiguration === provider.id
+                            ? `Deleting provider configuration ${provider.id}`
+                            : `Delete provider configuration ${provider.id}`
+                        }
+                      >
+                        {isDeletingConfiguration === provider.id
+                          ? "Deleting…"
+                          : "Delete provider configuration"}
+                      </button>
                     </div>
                   </div>
                 </li>

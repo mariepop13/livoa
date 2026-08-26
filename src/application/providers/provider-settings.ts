@@ -69,10 +69,15 @@ export const providerConfigurationInputSchema = z.object({
   credential: optionalCredential,
 });
 
-const credentialReferenceSchema = z.object({
+const providerConfigurationReferenceSchema = z.object({
   configurationId: requiredText,
   providerId: requiredText,
 });
+
+const deletionCredentialFailureMessage =
+  "The provider configuration could not be deleted because its local credential could not be removed.";
+const deletionSettingsFailureMessage =
+  "The local credential was removed, but the provider configuration could not be deleted from local settings. It remains saved without a credential. Try again.";
 
 export type ProviderConfigurationInput = z.infer<
   typeof providerConfigurationInputSchema
@@ -127,6 +132,10 @@ export type ProviderSettingsSnapshot = Readonly<{
   settings: AppSettings;
   credentialStatus: Readonly<Record<string, boolean>>;
   legacyCredentialProviderIds: readonly string[];
+}>;
+
+export type ProviderSettingsLoadOptions = Readonly<{
+  migrateLegacyCredentials?: boolean;
 }>;
 
 type CredentialState = Readonly<{
@@ -223,6 +232,8 @@ export function isProviderSettingsValidationError(
   return error instanceof ProviderSettingsValidationError;
 }
 
+let providerSettingsMutationQueue: Promise<void> = Promise.resolve();
+
 export class ProviderSettingsService {
   readonly #settingsRepository: SettingsRepository;
   readonly #credentialStore: CredentialStore;
@@ -235,9 +246,19 @@ export class ProviderSettingsService {
     this.#credentialStore = credentialStore;
   }
 
-  public async load(): Promise<
-    ProviderSettingsResult<ProviderSettingsSnapshot>
-  > {
+  public async load(
+    options: ProviderSettingsLoadOptions = {},
+  ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
+    if (options.migrateLegacyCredentials === false) {
+      return this.#load(options);
+    }
+
+    return this.#runMutation(() => this.#load(options));
+  }
+
+  async #load(
+    options: ProviderSettingsLoadOptions,
+  ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
     let rawSettings: AppSettings | null;
 
     try {
@@ -254,6 +275,7 @@ export class ProviderSettingsService {
 
     const credentialStateResult = await this.#readCredentialState(
       settingsResult.data.providers,
+      options.migrateLegacyCredentials ?? true,
     );
 
     if (!credentialStateResult.ok) {
@@ -268,6 +290,12 @@ export class ProviderSettingsService {
   }
 
   public async save(
+    input: unknown,
+  ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
+    return this.#runMutation(() => this.#save(input));
+  }
+
+  async #save(
     input: unknown,
   ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
     const inputResult = validateInput(input);
@@ -323,13 +351,20 @@ export class ProviderSettingsService {
       }
     }
 
-    return this.load();
+    return this.#load({});
   }
 
   public async removeCredential(
     reference: unknown,
   ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
-    const parsedReference = credentialReferenceSchema.safeParse(reference);
+    return this.#runMutation(() => this.#removeCredential(reference));
+  }
+
+  async #removeCredential(
+    reference: unknown,
+  ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
+    const parsedReference =
+      providerConfigurationReferenceSchema.safeParse(reference);
 
     if (!parsedReference.success) {
       return failure(
@@ -345,7 +380,110 @@ export class ProviderSettingsService {
       return failure(normalizeCredentialError(error, "remove"));
     }
 
-    return this.load();
+    return this.#load({});
+  }
+
+  public async deleteConfiguration(
+    reference: unknown,
+  ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
+    return this.#runMutation(() => this.#deleteConfiguration(reference));
+  }
+
+  async #deleteConfiguration(
+    reference: unknown,
+  ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
+    const parsedReference =
+      providerConfigurationReferenceSchema.safeParse(reference);
+
+    if (!parsedReference.success) {
+      return failure(
+        new ProviderSettingsValidationError([
+          { field: "form", message: validationMessages.form },
+        ]),
+      );
+    }
+
+    const settingsResult = await this.#readSettings();
+
+    if (!settingsResult.ok) {
+      return settingsResult;
+    }
+
+    const configuration = settingsResult.data.providers.find(
+      (provider) =>
+        provider.id === parsedReference.data.configurationId &&
+        provider.providerId === parsedReference.data.providerId,
+    );
+
+    if (configuration === undefined) {
+      return failure(
+        new ProviderSettingsValidationError([
+          { field: "form", message: validationMessages.form },
+        ]),
+      );
+    }
+
+    try {
+      await this.#credentialStore.remove(
+        this.#credentialReference(configuration),
+      );
+    } catch (error: unknown) {
+      void error;
+      return failure(
+        new ApplicationError(
+          "CREDENTIALS_ERROR",
+          deletionCredentialFailureMessage,
+        ),
+      );
+    }
+
+    const nextSettings: AppSettings = {
+      ...settingsResult.data,
+      providers: settingsResult.data.providers.filter(
+        (provider) =>
+          provider.id !== configuration.id ||
+          provider.providerId !== configuration.providerId,
+      ),
+    };
+
+    try {
+      await this.#settingsRepository.save(nextSettings);
+    } catch (error: unknown) {
+      void error;
+      return failure(
+        new ApplicationError("STORAGE_ERROR", deletionSettingsFailureMessage, {
+          retryable: true,
+        }),
+      );
+    }
+
+    const credentialStateResult = await this.#readCredentialState(
+      nextSettings.providers,
+      false,
+    );
+
+    if (!credentialStateResult.ok) {
+      return credentialStateResult;
+    }
+
+    return success({
+      settings: nextSettings,
+      credentialStatus: credentialStateResult.data.status,
+      legacyCredentialProviderIds: credentialStateResult.data.legacyProviderIds,
+    });
+  }
+
+  async #runMutation<Result>(
+    operation: () => Promise<Result>,
+  ): Promise<Result> {
+    const result = providerSettingsMutationQueue.then(operation, operation);
+
+    providerSettingsMutationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+
+    return result;
   }
 
   async #readSettings(): Promise<ProviderSettingsResult<AppSettings>> {
@@ -358,6 +496,7 @@ export class ProviderSettingsService {
 
   async #readCredentialState(
     providers: readonly ProviderConfiguration[],
+    migrateLegacy = true,
   ): Promise<ProviderSettingsResult<CredentialState>> {
     const entries: Array<readonly [string, boolean]> = [];
     const legacyProviderIds = new Set<string>();
@@ -373,7 +512,10 @@ export class ProviderSettingsService {
     for (const provider of providers) {
       const reference = this.#credentialReference(provider);
 
-      if (providerConfigurationCounts.get(provider.providerId) === 1) {
+      if (
+        migrateLegacy &&
+        providerConfigurationCounts.get(provider.providerId) === 1
+      ) {
         try {
           await this.#credentialStore.migrateLegacy(reference);
         } catch (error: unknown) {
