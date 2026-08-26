@@ -232,6 +232,8 @@ export function isProviderSettingsValidationError(
   return error instanceof ProviderSettingsValidationError;
 }
 
+let providerSettingsMutationQueue: Promise<void> = Promise.resolve();
+
 export class ProviderSettingsService {
   readonly #settingsRepository: SettingsRepository;
   readonly #credentialStore: CredentialStore;
@@ -246,6 +248,16 @@ export class ProviderSettingsService {
 
   public async load(
     options: ProviderSettingsLoadOptions = {},
+  ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
+    if (options.migrateLegacyCredentials === false) {
+      return this.#load(options);
+    }
+
+    return this.#runMutation(() => this.#load(options));
+  }
+
+  async #load(
+    options: ProviderSettingsLoadOptions,
   ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
     let rawSettings: AppSettings | null;
 
@@ -278,6 +290,12 @@ export class ProviderSettingsService {
   }
 
   public async save(
+    input: unknown,
+  ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
+    return this.#runMutation(() => this.#save(input));
+  }
+
+  async #save(
     input: unknown,
   ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
     const inputResult = validateInput(input);
@@ -333,10 +351,16 @@ export class ProviderSettingsService {
       }
     }
 
-    return this.load();
+    return this.#load({});
   }
 
   public async removeCredential(
+    reference: unknown,
+  ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
+    return this.#runMutation(() => this.#removeCredential(reference));
+  }
+
+  async #removeCredential(
     reference: unknown,
   ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
     const parsedReference =
@@ -356,10 +380,16 @@ export class ProviderSettingsService {
       return failure(normalizeCredentialError(error, "remove"));
     }
 
-    return this.load();
+    return this.#load({});
   }
 
   public async deleteConfiguration(
+    reference: unknown,
+  ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
+    return this.#runMutation(() => this.#deleteConfiguration(reference));
+  }
+
+  async #deleteConfiguration(
     reference: unknown,
   ): Promise<ProviderSettingsResult<ProviderSettingsSnapshot>> {
     const parsedReference =
@@ -441,6 +471,19 @@ export class ProviderSettingsService {
       credentialStatus: credentialStateResult.data.status,
       legacyCredentialProviderIds: credentialStateResult.data.legacyProviderIds,
     });
+  }
+
+  async #runMutation<Result>(
+    operation: () => Promise<Result>,
+  ): Promise<Result> {
+    const result = providerSettingsMutationQueue.then(operation, operation);
+
+    providerSettingsMutationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+
+    return result;
   }
 
   async #readSettings(): Promise<ProviderSettingsResult<AppSettings>> {

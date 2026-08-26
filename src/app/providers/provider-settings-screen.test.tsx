@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -460,7 +461,11 @@ describe("ProviderSettingsScreen", () => {
     );
 
     fireEvent.click(
-      await screen.findByRole("button", {
+      await screen.findByRole("button", { name: "Edit openrouter-local" }),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
         name: "Delete provider configuration openrouter-local",
       }),
     );
@@ -469,6 +474,23 @@ describe("ProviderSettingsScreen", () => {
     expect(
       screen.getByRole("button", {
         name: "Deleting provider configuration openrouter-local",
+      }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Add another provider" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Save provider configuration" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Connect OpenRouter account" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Edit openrouter-local" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", {
+        name: "Remove saved credential for openrouter-local",
       }),
     ).toBeDisabled();
 
@@ -530,6 +552,9 @@ describe("ProviderSettingsScreen", () => {
     expect(
       screen.getByRole("heading", { name: "Add provider configuration" }),
     ).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Saved providers" }),
+    ).toHaveFocus();
     expect(screen.getByLabelText("Configuration ID")).toHaveValue("");
     expect(screen.queryByText("openrouter-local")).not.toBeInTheDocument();
     expect(screen.getByText("openrouter-secondary")).toBeVisible();
@@ -537,6 +562,36 @@ describe("ProviderSettingsScreen", () => {
     expect(credentialStore.credentials.get("openrouter-secondary")).toBe(
       "credential-that-must-remain",
     );
+  });
+
+  it("places every provider action group consistently below its card content", async () => {
+    const settings: AppSettings = {
+      theme: "system",
+      providers: [
+        { id: "without-credential", providerId: "openrouter", enabled: true },
+        { id: "with-credential", providerId: "openrouter", enabled: true },
+      ],
+    };
+
+    renderScreen(
+      createService(settings, ["with-credential", "hidden-credential"]),
+    );
+
+    const actionGroups = await screen.findAllByRole("group", {
+      name: /Provider configuration actions for/u,
+    });
+
+    expect(actionGroups).toHaveLength(2);
+    for (const actionGroup of actionGroups) {
+      expect(actionGroup).toHaveClass("mt-4", "flex", "flex-wrap", "gap-2");
+    }
+    expect(within(actionGroups[0]).getAllByRole("button")).toHaveLength(2);
+    expect(within(actionGroups[1]).getAllByRole("button")).toHaveLength(3);
+    expect(
+      within(actionGroups[1]).getByRole("button", {
+        name: "Remove saved credential for with-credential",
+      }),
+    ).toBeVisible();
   });
 
   it("shows a fixed safe error and keeps settings when credential removal fails", async () => {

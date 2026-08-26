@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { AppSettings } from "@/domain/models";
 import type {
@@ -15,6 +15,7 @@ import {
 class MemorySettingsRepository implements SettingsRepository {
   public settings: AppSettings | null;
   public readonly savedSettings: AppSettings[] = [];
+  public saveGate: Promise<void> | undefined;
   public saveError: Error | undefined;
 
   public constructor(settings: AppSettings | null = null) {
@@ -30,6 +31,10 @@ class MemorySettingsRepository implements SettingsRepository {
       throw this.saveError;
     }
 
+    if (this.saveGate !== undefined) {
+      await this.saveGate;
+    }
+
     this.savedSettings.push(settings);
     this.settings = settings;
   }
@@ -42,6 +47,7 @@ class MemoryCredentialStore implements CredentialStore {
     readonly [CredentialReference, string]
   > = [];
   public readonly removedReferences: CredentialReference[] = [];
+  public removeGate: Promise<void> | undefined;
   public removeError: Error | undefined;
   public saveError: Error | undefined;
 
@@ -69,6 +75,10 @@ class MemoryCredentialStore implements CredentialStore {
       throw this.removeError;
     }
 
+    if (this.removeGate !== undefined) {
+      await this.removeGate;
+    }
+
     this.credentials.delete(reference.configurationId);
   }
 
@@ -92,6 +102,18 @@ class MemoryCredentialStore implements CredentialStore {
     this.legacyCredentials.delete(reference.providerId);
     return true;
   }
+}
+
+function createDeferred(): Readonly<{
+  promise: Promise<void>;
+  resolve: () => void;
+}> {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((innerResolve) => {
+    resolve = innerResolve;
+  });
+
+  return { promise, resolve };
 }
 
 const providerInput = {
@@ -336,6 +358,135 @@ describe("ProviderSettingsService", () => {
     expect(result.data.credentialStatus).toEqual({
       [secondConfigurationId]: true,
     });
+  });
+
+  it("serializes provider mutations so deletion cannot overwrite a concurrent peer save", async () => {
+    const secondConfigurationId = "openrouter-secondary";
+    const settingsRepository = new MemorySettingsRepository({
+      theme: "system",
+      providers: [
+        {
+          id: providerInput.id,
+          providerId: providerInput.providerId,
+          enabled: true,
+        },
+        {
+          id: secondConfigurationId,
+          providerId: providerInput.providerId,
+          enabled: true,
+        },
+      ],
+    });
+    const credentialStore = new MemoryCredentialStore();
+    credentialStore.credentials.set(providerInput.id, providerInput.credential);
+    credentialStore.credentials.set(secondConfigurationId, "old-peer-secret");
+    const removal = createDeferred();
+    credentialStore.removeGate = removal.promise;
+    const service = new ProviderSettingsService(
+      settingsRepository,
+      credentialStore,
+    );
+
+    const deletion = service.deleteConfiguration({
+      configurationId: providerInput.id,
+      providerId: providerInput.providerId,
+    });
+
+    await vi.waitFor(() => {
+      expect(credentialStore.removedReferences).toHaveLength(1);
+    });
+
+    const peerSave = service.save({
+      ...providerInput,
+      id: secondConfigurationId,
+      credential: "new-peer-secret",
+    });
+
+    await Promise.resolve();
+    expect(settingsRepository.savedSettings).toHaveLength(0);
+    expect(credentialStore.savedCredentials).toHaveLength(0);
+
+    removal.resolve();
+    const [deletionResult, peerSaveResult] = await Promise.all([
+      deletion,
+      peerSave,
+    ]);
+
+    expect(deletionResult.ok).toBe(true);
+    expect(peerSaveResult.ok).toBe(true);
+    expect(settingsRepository.settings?.providers).toEqual([
+      {
+        id: secondConfigurationId,
+        providerId: providerInput.providerId,
+        baseUrl: providerInput.baseUrl,
+        selectedModelId: providerInput.selectedModelId,
+        enabled: true,
+      },
+    ]);
+    expect(credentialStore.credentials.has(providerInput.id)).toBe(false);
+    expect(credentialStore.credentials.get(secondConfigurationId)).toBe(
+      "new-peer-secret",
+    );
+  });
+
+  it("queues migration-enabled loads across service instances during deletion", async () => {
+    const settingsRepository = new MemorySettingsRepository({
+      theme: "system",
+      providers: [
+        {
+          id: providerInput.id,
+          providerId: providerInput.providerId,
+          enabled: true,
+        },
+      ],
+    });
+    const credentialStore = new MemoryCredentialStore();
+    credentialStore.credentials.set(providerInput.id, providerInput.credential);
+    credentialStore.legacyCredentials.set(
+      providerInput.providerId,
+      "legacy-secret-that-must-not-be-migrated",
+    );
+    const settingsSave = createDeferred();
+    settingsRepository.saveGate = settingsSave.promise;
+    const deletionService = new ProviderSettingsService(
+      settingsRepository,
+      credentialStore,
+    );
+    const loadingService = new ProviderSettingsService(
+      settingsRepository,
+      credentialStore,
+    );
+
+    const deletion = deletionService.deleteConfiguration({
+      configurationId: providerInput.id,
+      providerId: providerInput.providerId,
+    });
+
+    await vi.waitFor(() => {
+      expect(credentialStore.credentials.has(providerInput.id)).toBe(false);
+    });
+
+    const loading = loadingService.load();
+
+    await Promise.resolve();
+    expect(
+      credentialStore.legacyCredentials.get(providerInput.providerId),
+    ).toBe("legacy-secret-that-must-not-be-migrated");
+    expect(credentialStore.credentials.has(providerInput.id)).toBe(false);
+
+    settingsSave.resolve();
+    const [deletionResult, loadingResult] = await Promise.all([
+      deletion,
+      loading,
+    ]);
+
+    expect(deletionResult.ok).toBe(true);
+    expect(loadingResult.ok).toBe(true);
+    expect(settingsRepository.settings?.providers).toEqual([]);
+    expect(credentialStore.credentials.has(providerInput.id)).toBe(false);
+    expect(
+      credentialStore.legacyCredentials.get(providerInput.providerId),
+    ).toBe("legacy-secret-that-must-not-be-migrated");
   });
 
   it("validates a deletion reference before touching either store", async () => {
