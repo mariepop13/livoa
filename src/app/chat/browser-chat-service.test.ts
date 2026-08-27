@@ -94,7 +94,7 @@ describe("BrowserChatService provider credentials", () => {
     localStorage.clear();
   });
 
-  it("uses the credential belonging to the selected configuration", async () => {
+  it("labels and sends through the same sendable configuration", async () => {
     const selectedConfiguration = {
       id: "Test 1",
       providerId: "openrouter",
@@ -106,11 +106,11 @@ describe("BrowserChatService provider credentials", () => {
       theme: "system",
       providers: [
         {
-          id: "Test1",
+          id: "incomplete-openrouter",
           providerId: "openrouter",
           baseUrl: "https://openrouter.ai/api/v1",
           selectedModelId: "openai/gpt-4.1-mini",
-          enabled: false,
+          enabled: true,
         },
         selectedConfiguration,
       ],
@@ -131,6 +131,7 @@ describe("BrowserChatService provider credentials", () => {
       storage: localStorage,
     });
 
+    const snapshot = await service.load();
     const result = await service.streamMessage({
       character,
       content: "Hi",
@@ -139,11 +140,41 @@ describe("BrowserChatService provider credentials", () => {
       signal: new AbortController().signal,
     });
 
+    expect(snapshot.providerLabel).toBe("openrouter · openai/gpt-5");
     expect(result.status).toBe("completed");
     expect(fetcher).toHaveBeenCalledTimes(1);
     const headers = new Headers(fetcher.mock.calls[0]?.[1]?.headers);
     expect(headers.get("authorization")).toBe(
       "Bearer selected-configuration-secret",
     );
+  });
+
+  it("labels the provider as unavailable when no configuration can send", async () => {
+    const settings: AppSettings = {
+      theme: "system",
+      providers: [
+        {
+          id: "missing-model",
+          providerId: "openrouter",
+          baseUrl: "https://openrouter.ai/api/v1",
+          enabled: true,
+        },
+        {
+          id: "disabled-provider",
+          providerId: "openrouter",
+          baseUrl: "https://openrouter.ai/api/v1",
+          selectedModelId: "openai/gpt-5",
+          enabled: false,
+        },
+      ],
+    };
+    const service = new BrowserChatService({
+      repositories: createRepositories(settings),
+      storage: localStorage,
+    });
+
+    await expect(service.load()).resolves.toMatchObject({
+      providerLabel: "Provider unavailable",
+    });
   });
 });

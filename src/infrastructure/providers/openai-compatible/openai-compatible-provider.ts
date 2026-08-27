@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { MAX_MESSAGE_CONTENT_LENGTH } from "@/domain/models";
+
 import type {
   AiModel,
   AiProvider,
@@ -89,6 +91,14 @@ const chatCompletionChunkSchema = z.object({
 
 type Fetcher = typeof globalThis.fetch;
 
+export const OPENAI_COMPATIBLE_STREAM_LIMITS = {
+  maxRawBufferBytes: 512 * 1024,
+  maxRawEventBytes: 256 * 1024,
+  maxOutputCharacters: MAX_MESSAGE_CONTENT_LENGTH,
+  maxEvents: 2_048,
+  deadlineMilliseconds: 120_000,
+} as const;
+
 export type OpenAiCompatibleProviderOptions = Readonly<{
   id: string;
   baseUrl: string;
@@ -173,49 +183,94 @@ export class OpenAiCompatibleProvider implements AiProvider {
     }
 
     signal?.throwIfAborted();
+    const streamDeadline = createStreamDeadline(signal);
 
-    const response = await this.#request(
-      "chat/completions",
-      {
-        body: JSON.stringify({
-          messages: parsedRequest.data.messages,
-          model: parsedRequest.data.model,
-          stream: true,
-        }),
-        headers: this.#headers("text/event-stream", true),
-        method: "POST",
-        signal,
-      },
-      signal,
-    );
+    try {
+      const response = await awaitWithAbortSignal(
+        this.#request(
+          "chat/completions",
+          {
+            body: JSON.stringify({
+              messages: parsedRequest.data.messages,
+              model: parsedRequest.data.model,
+              stream: true,
+            }),
+            headers: this.#headers("text/event-stream", true),
+            method: "POST",
+            signal,
+          },
+          signal,
+        ),
+        streamDeadline.signal,
+      );
 
-    if (!isEventStreamResponse(response) || response.body === null) {
-      throw new OpenAiCompatibleProviderError("invalid_response");
-    }
-
-    for await (const data of readServerSentEventData(response.body, signal)) {
-      signal?.throwIfAborted();
-
-      if (data === "[DONE]") {
-        yield { type: "done" };
-        return;
+      if (streamDeadline.hasExpired()) {
+        throw new OpenAiCompatibleProviderError("invalid_response");
       }
 
-      const parsedChunk = parseJsonChunk(data);
+      if (!isEventStreamResponse(response) || response.body === null) {
+        throw new OpenAiCompatibleProviderError("invalid_response");
+      }
 
-      for (const choice of parsedChunk.choices) {
-        signal?.throwIfAborted();
+      let acceptedEventCount = 0;
+      let acceptedOutputLength = 0;
 
+      for await (const data of readServerSentEventData(
+        response.body,
+        streamDeadline.signal,
+      )) {
+        if (streamDeadline.hasExpired()) {
+          throw new OpenAiCompatibleProviderError("invalid_response");
+        }
+
+        streamDeadline.signal.throwIfAborted();
+
+        if (data === "[DONE]") {
+          yield { type: "done" };
+          return;
+        }
+
+        acceptedEventCount += 1;
         if (
-          choice.delta.content !== undefined &&
-          choice.delta.content !== null
+          acceptedEventCount >
+          OPENAI_COMPATIBLE_STREAM_LIMITS.maxEvents
         ) {
-          yield { type: "text", content: choice.delta.content };
+          throw new OpenAiCompatibleProviderError("invalid_response");
+        }
+
+        const parsedChunk = parseJsonChunk(data);
+
+        for (const choice of parsedChunk.choices) {
+          streamDeadline.signal.throwIfAborted();
+
+          if (
+            choice.delta.content !== undefined &&
+            choice.delta.content !== null
+          ) {
+            if (
+              choice.delta.content.length >
+              OPENAI_COMPATIBLE_STREAM_LIMITS.maxOutputCharacters -
+                acceptedOutputLength
+            ) {
+              throw new OpenAiCompatibleProviderError("invalid_response");
+            }
+
+            acceptedOutputLength += choice.delta.content.length;
+            yield { type: "text", content: choice.delta.content };
+          }
         }
       }
-    }
 
-    throw new OpenAiCompatibleProviderError("invalid_response");
+      throw new OpenAiCompatibleProviderError("invalid_response");
+    } catch (error: unknown) {
+      if (streamDeadline.hasExpired()) {
+        throw new OpenAiCompatibleProviderError("invalid_response");
+      }
+
+      throw error;
+    } finally {
+      streamDeadline.dispose();
+    }
   }
 
   async #request(
@@ -314,6 +369,42 @@ function parseJsonChunk(
   return parsed.data;
 }
 
+type StreamDeadline = Readonly<{
+  signal: AbortSignal;
+  hasExpired(): boolean;
+  dispose(): void;
+}>;
+
+function createStreamDeadline(sourceSignal?: AbortSignal): StreamDeadline {
+  const controller = new AbortController();
+  let expired = false;
+  const abortFromSource = () => {
+    controller.abort(sourceSignal?.reason);
+  };
+
+  if (sourceSignal?.aborted === true) {
+    abortFromSource();
+  } else {
+    sourceSignal?.addEventListener("abort", abortFromSource, { once: true });
+  }
+
+  const timeoutId = globalThis.setTimeout(() => {
+    expired = true;
+    controller.abort();
+  }, OPENAI_COMPATIBLE_STREAM_LIMITS.deadlineMilliseconds);
+
+  return {
+    signal: controller.signal,
+    hasExpired() {
+      return expired;
+    },
+    dispose() {
+      globalThis.clearTimeout(timeoutId);
+      sourceSignal?.removeEventListener("abort", abortFromSource);
+    },
+  };
+}
+
 async function* readServerSentEventData(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
@@ -326,8 +417,9 @@ async function* readServerSentEventData(
     throw new OpenAiCompatibleProviderError("invalid_response");
   }
 
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let buffer = "";
+  let bufferedByteLength = 0;
   let reachedEnd = false;
 
   try {
@@ -349,16 +441,47 @@ async function* readServerSentEventData(
       }
 
       if (result.done) {
-        buffer += decoder.decode();
-        reachedEnd = true;
-        break;
-      }
+        try {
+          buffer += decoder.decode();
+        } catch {
+          throw new OpenAiCompatibleProviderError("invalid_response");
+        }
 
-      buffer += decoder.decode(result.value, { stream: true });
+        reachedEnd = true;
+      } else {
+        if (
+          result.value.byteLength >
+          OPENAI_COMPATIBLE_STREAM_LIMITS.maxRawBufferBytes -
+            bufferedByteLength
+        ) {
+          throw new OpenAiCompatibleProviderError("invalid_response");
+        }
+
+        bufferedByteLength += result.value.byteLength;
+
+        try {
+          buffer += decoder.decode(result.value, { stream: true });
+        } catch {
+          throw new OpenAiCompatibleProviderError("invalid_response");
+        }
+      }
 
       let event = takeNextEvent(buffer);
       while (event !== undefined) {
         signal?.throwIfAborted();
+
+        if (
+          event.byteLength >
+          OPENAI_COMPATIBLE_STREAM_LIMITS.maxRawEventBytes
+        ) {
+          throw new OpenAiCompatibleProviderError("invalid_response");
+        }
+
+        bufferedByteLength -= event.consumedByteLength;
+        if (bufferedByteLength < 0) {
+          throw new OpenAiCompatibleProviderError("invalid_response");
+        }
+
         buffer = event.remaining;
         const data = eventData(event.value);
 
@@ -368,10 +491,30 @@ async function* readServerSentEventData(
 
         event = takeNextEvent(buffer);
       }
+
+      if (
+        !result.done &&
+        bufferedByteLength >
+          OPENAI_COMPATIBLE_STREAM_LIMITS.maxRawEventBytes
+      ) {
+        throw new OpenAiCompatibleProviderError("invalid_response");
+      }
+
+      if (result.done) {
+        break;
+      }
     }
 
     if (buffer.trim().length > 0) {
       signal?.throwIfAborted();
+
+      if (
+        bufferedByteLength >
+        OPENAI_COMPATIBLE_STREAM_LIMITS.maxRawEventBytes
+      ) {
+        throw new OpenAiCompatibleProviderError("invalid_response");
+      }
+
       const data = eventData(buffer);
 
       if (data !== undefined) {
@@ -393,17 +536,53 @@ async function* readServerSentEventData(
 
 function takeNextEvent(
   buffer: string,
-): { readonly value: string; readonly remaining: string } | undefined {
+):
+  | {
+      readonly value: string;
+      readonly remaining: string;
+      readonly byteLength: number;
+      readonly consumedByteLength: number;
+    }
+  | undefined {
   const boundary = /\r\n\r\n|\n\n|\r\r/.exec(buffer);
 
   if (boundary?.index === undefined) {
     return undefined;
   }
 
+  const value = buffer.slice(0, boundary.index);
+
   return {
-    value: buffer.slice(0, boundary.index),
+    value,
     remaining: buffer.slice(boundary.index + boundary[0].length),
+    byteLength: utf8ByteLength(value),
+    consumedByteLength: utf8ByteLength(value) + boundary[0].length,
   };
+}
+
+function utf8ByteLength(value: string): number {
+  let byteLength = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const codePoint = value.codePointAt(index);
+
+    if (codePoint === undefined) {
+      continue;
+    }
+
+    if (codePoint <= 0x7f) {
+      byteLength += 1;
+    } else if (codePoint <= 0x7ff) {
+      byteLength += 2;
+    } else if (codePoint <= 0xffff) {
+      byteLength += 3;
+    } else {
+      byteLength += 4;
+      index += 1;
+    }
+  }
+
+  return byteLength;
 }
 
 function eventData(event: string): string | undefined {

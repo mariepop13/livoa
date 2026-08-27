@@ -13,7 +13,10 @@ import {
 } from "@/application/conversations";
 import { createConversationContextAssembler } from "@/application/conversations/context";
 import { normalizeApplicationError } from "@/application/error";
-import { ProviderSettingsService } from "@/application/providers/provider-settings";
+import {
+  ProviderSettingsService,
+  type ProviderSettingsSnapshot,
+} from "@/application/providers/provider-settings";
 import type {
   AiProvider,
   ChatMessage,
@@ -77,6 +80,7 @@ type BrowserChatServiceOptions = Readonly<{
 }>;
 
 type ConfiguredProvider = Readonly<{
+  configuration: ProviderConfiguration;
   model: string;
   provider: AiProvider;
 }>;
@@ -128,8 +132,49 @@ function readCredential(
   }
 }
 
-function providerLabel(configuration: ProviderConfiguration): string {
-  return `${configuration.providerId} · ${configuration.selectedModelId ?? "No model selected"}`;
+function providerLabel(configuredProvider: ConfiguredProvider): string {
+  return `${configuredProvider.configuration.providerId} · ${configuredProvider.model}`;
+}
+
+function selectSendableProvider(
+  snapshot: ProviderSettingsSnapshot,
+  storage: Storage,
+): ConfiguredProvider | undefined {
+  for (const configuration of snapshot.settings.providers) {
+    if (
+      !configuration.enabled ||
+      configuration.selectedModelId === undefined ||
+      configuration.baseUrl === undefined ||
+      snapshot.credentialStatus[configuration.id] !== true
+    ) {
+      continue;
+    }
+
+    const credential = readCredential(storage, {
+      configurationId: configuration.id,
+      providerId: configuration.providerId,
+    });
+
+    if (credential === null) {
+      continue;
+    }
+
+    try {
+      return {
+        configuration,
+        model: configuration.selectedModelId,
+        provider: new OpenAiCompatibleProvider({
+          id: configuration.providerId,
+          baseUrl: configuration.baseUrl,
+          credential,
+        }),
+      };
+    } catch {
+      continue;
+    }
+  }
+
+  return undefined;
 }
 
 function chatMessages(
@@ -325,18 +370,21 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
       throw new ChatAdapterError(result.error.message);
     }
 
-    const configuration = result.data.settings.providers.find(
-      (provider) => provider.enabled,
-    );
+    const configuredProvider = selectSendableProvider(result.data, this.#storage);
 
-    return configuration === undefined
-      ? "No enabled provider configured"
-      : providerLabel(configuration);
+    return configuredProvider === undefined
+      ? "Provider unavailable"
+      : providerLabel(configuredProvider);
   }
 
   async #providerForMessage(): Promise<ConfiguredProvider> {
     if (this.#testDouble !== undefined) {
       return {
+        configuration: {
+          id: "local-test",
+          providerId: "local-test-provider",
+          enabled: true,
+        },
         model: "local-test-model",
         provider: createDeterministicTestProvider(this.#testDouble),
       };
@@ -347,53 +395,15 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
       throw new ChatAdapterError(result.error.message);
     }
 
-    const configuration = result.data.settings.providers.find(
-      (provider) => provider.enabled && provider.selectedModelId !== undefined,
-    );
+    const configuredProvider = selectSendableProvider(result.data, this.#storage);
 
-    if (configuration === undefined) {
+    if (configuredProvider === undefined) {
       throw new ChatAdapterError(
-        "Configure an enabled provider and selected model before sending a message.",
+        "Configure an enabled provider with a base URL, selected model, and saved credential before sending a message.",
       );
     }
 
-    if (configuration.baseUrl === undefined) {
-      throw new ChatAdapterError(
-        "Add a base URL to the selected provider before sending a message.",
-      );
-    }
-
-    if (result.data.credentialStatus[configuration.id] !== true) {
-      throw new ChatAdapterError(
-        "Save a credential for the selected provider before sending a message.",
-      );
-    }
-
-    const credential = readCredential(this.#storage, {
-      configurationId: configuration.id,
-      providerId: configuration.providerId,
-    });
-    if (credential === null) {
-      throw new ChatAdapterError(
-        "The saved credential is unavailable for the selected provider.",
-      );
-    }
-
-    const model = configuration.selectedModelId;
-    if (model === undefined) {
-      throw new ChatAdapterError(
-        "Configure a selected model before sending a message.",
-      );
-    }
-
-    return {
-      model,
-      provider: new OpenAiCompatibleProvider({
-        id: configuration.providerId,
-        baseUrl: configuration.baseUrl,
-        credential,
-      }),
-    };
+    return configuredProvider;
   }
 
   async #readAssistantResponse(

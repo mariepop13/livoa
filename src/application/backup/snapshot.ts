@@ -12,6 +12,10 @@ import {
 export const BACKUP_FORMAT = "livoa-local-backup";
 export const BACKUP_VERSION = 1;
 
+export const MAX_BACKUP_IMPORT_SIZE = 5 * 1024 * 1024;
+export const MAX_BACKUP_COLLECTION_LENGTH = 5_000;
+export const MAX_BACKUP_PROVIDER_CONFIGURATION_COUNT = 100;
+
 const isoDateStringSchema = z.string().refine(
   (value) => {
     const date = new Date(value);
@@ -63,14 +67,20 @@ const backupProviderConfigurationSchema = providerConfigurationSchema
   .strict();
 
 const backupSettingsSchema = appSettingsSchema
-  .extend({ providers: z.array(backupProviderConfigurationSchema) })
+  .extend({
+    providers: z
+      .array(backupProviderConfigurationSchema)
+      .max(MAX_BACKUP_PROVIDER_CONFIGURATION_COUNT),
+  })
   .strict();
 
 const backupDataShape = z.object({
-  characters: z.array(backupCharacterSchema),
-  personas: z.array(backupPersonaSchema),
-  conversations: z.array(backupConversationSchema),
-  messages: z.array(backupMessageSchema),
+  characters: z.array(backupCharacterSchema).max(MAX_BACKUP_COLLECTION_LENGTH),
+  personas: z.array(backupPersonaSchema).max(MAX_BACKUP_COLLECTION_LENGTH),
+  conversations: z
+    .array(backupConversationSchema)
+    .max(MAX_BACKUP_COLLECTION_LENGTH),
+  messages: z.array(backupMessageSchema).max(MAX_BACKUP_COLLECTION_LENGTH),
   settings: backupSettingsSchema.nullable(),
 });
 

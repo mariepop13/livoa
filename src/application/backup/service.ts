@@ -1,6 +1,9 @@
+import type { CredentialStore } from "@/domain/ports";
+
 import {
   BACKUP_FORMAT,
   BACKUP_VERSION,
+  MAX_BACKUP_IMPORT_SIZE,
   backupSnapshotSchema,
   type BackupData,
   type BackupSnapshot,
@@ -24,20 +27,22 @@ export type BackupFile = Readonly<{
   contents: string;
 }>;
 
-export type BackupValidationError = Readonly<{
-  code: "INVALID_BACKUP";
+export type BackupError = Readonly<{
+  code: "INVALID_BACKUP" | "CREDENTIAL_INVALIDATION_FAILED";
   message: string;
 }>;
 
 export type BackupResult<T> =
   | { readonly ok: true; readonly data: T }
-  | { readonly ok: false; readonly error: BackupValidationError };
+  | { readonly ok: false; readonly error: BackupError };
 
 export interface BackupApplicationService {
   createExport(): Promise<BackupFile>;
   inspectImport(contents: string): BackupResult<BackupPreview>;
   importBackup(contents: string): Promise<BackupResult<BackupPreview>>;
 }
+
+type CredentialInvalidator = Pick<CredentialStore, "invalidateAll">;
 
 type BackupServiceDependencies = Readonly<{
   now: () => Date;
@@ -62,7 +67,22 @@ function invalidBackup(): BackupResult<never> {
   };
 }
 
+function credentialInvalidationFailed(): BackupResult<never> {
+  return {
+    ok: false,
+    error: {
+      code: "CREDENTIAL_INVALIDATION_FAILED",
+      message:
+        "Backup could not be imported because saved credentials could not be disconnected. Your current data was not changed.",
+    },
+  };
+}
+
 function parseBackup(contents: string): BackupResult<BackupSnapshot> {
+  if (contents.length > MAX_BACKUP_IMPORT_SIZE) {
+    return invalidBackup();
+  }
+
   let candidate: unknown;
 
   try {
@@ -92,6 +112,7 @@ function backupFileName(exportedAt: string): string {
 export class LocalBackupService implements BackupApplicationService {
   public constructor(
     private readonly storage: BackupStorage,
+    private readonly credentialStore: CredentialInvalidator,
     private readonly dependencies: BackupServiceDependencies = defaultDependencies,
   ) {}
 
@@ -125,6 +146,11 @@ export class LocalBackupService implements BackupApplicationService {
       return parsed;
     }
 
+    try {
+      await this.credentialStore.invalidateAll();
+    } catch {
+      return credentialInvalidationFailed();
+    }
     await this.storage.replaceAll(parsed.data.data);
     return success(previewFromSnapshot(parsed.data));
   }

@@ -171,7 +171,7 @@ test("exports and restores every supported collection without credentials", asyn
   await importButton.press("Enter");
 
   await expect(page.getByRole("status")).toHaveText(
-    "Backup imported. Your local Livoa data was replaced. Credentials were unchanged.",
+    "Backup imported. Your local Livoa data was replaced. Providers were disconnected; enter credentials again before using them.",
   );
 
   await page.goto("/characters");
@@ -193,7 +193,7 @@ test("exports and restores every supported collection without credentials", asyn
         ),
       ),
     )
-    .toBe("credential-must-never-be-exported");
+    .toBeNull();
 });
 
 test("rejects an invalid file before showing replacement confirmation", async ({

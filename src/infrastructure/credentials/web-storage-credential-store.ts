@@ -89,6 +89,34 @@ export class WebStorageCredentialStore implements CredentialStore {
     }
   }
 
+  public async invalidateAll(): Promise<void> {
+    const storageKeys: string[] = [];
+
+    try {
+      for (let index = 0; index < this.#storage.length; index += 1) {
+        const storageKey = this.#storage.key(index);
+
+        if (
+          storageKey !== null &&
+          (storageKey.startsWith(credentialStoragePrefix) ||
+            storageKey.startsWith(legacyCredentialStoragePrefix))
+        ) {
+          storageKeys.push(storageKey);
+        }
+      }
+    } catch {
+      throw new CredentialStoreError("storage_read_failed");
+    }
+
+    try {
+      for (const storageKey of storageKeys) {
+        this.#storage.removeItem(storageKey);
+      }
+    } catch {
+      throw new CredentialStoreError("storage_remove_failed");
+    }
+  }
+
   public async hasLegacy(reference: CredentialReference): Promise<boolean> {
     const storageKey = legacyCredentialStorageKey(reference);
 

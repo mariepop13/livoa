@@ -26,6 +26,8 @@ class MemoryCredentialStore implements CredentialStore {
 
   public async remove(): Promise<void> {}
 
+  public async invalidateAll(): Promise<void> {}
+
   public async hasLegacy(): Promise<boolean> {
     return false;
   }

@@ -65,6 +65,25 @@ describe("WebStorageCredentialStore", () => {
     await expect(store.hasLegacy(reference)).resolves.toBe(false);
   });
 
+  it("invalidates all managed credential storage without clearing unrelated data", async () => {
+    const store = new WebStorageCredentialStore(localStorage);
+    const secondReference = {
+      configurationId: "secondary-openrouter",
+      providerId,
+    };
+    await store.save(reference, credential);
+    await store.save(secondReference, "second-test-provider-key");
+    localStorage.setItem(legacyStorageKey, "legacy-test-provider-key");
+    localStorage.setItem("livoa:preferences:theme", "dark");
+
+    await store.invalidateAll();
+
+    await expect(store.has(reference)).resolves.toBe(false);
+    await expect(store.has(secondReference)).resolves.toBe(false);
+    await expect(store.hasLegacy(reference)).resolves.toBe(false);
+    expect(localStorage.getItem("livoa:preferences:theme")).toBe("dark");
+  });
+
   it("does not expose a credential-reading method", () => {
     const store = new WebStorageCredentialStore(localStorage);
     const publicMethods = Object.getOwnPropertyNames(
@@ -76,6 +95,7 @@ describe("WebStorageCredentialStore", () => {
       "has",
       "save",
       "remove",
+      "invalidateAll",
       "hasLegacy",
       "migrateLegacy",
     ]);
