@@ -52,6 +52,7 @@ export interface CredentialStore {
   has(reference: CredentialReference): Promise<boolean>;
   save(reference: CredentialReference, credential: string): Promise<void>;
   remove(reference: CredentialReference): Promise<void>;
+  invalidateAll(): Promise<void>;
   hasLegacy(reference: CredentialReference): Promise<boolean>;
   migrateLegacy(reference: CredentialReference): Promise<boolean>;
 }

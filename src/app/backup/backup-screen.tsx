@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { useState, type ChangeEvent } from "react";
 
-import type {
-  BackupApplicationService,
-  BackupFile,
-  BackupPreview,
+import {
+  MAX_BACKUP_IMPORT_SIZE,
+  type BackupApplicationService,
+  type BackupFile,
+  type BackupPreview,
 } from "@/application/backup";
 
 import { createBrowserBackupService } from "./browser-backup-service";
@@ -98,6 +99,11 @@ export default function BackupScreen({
       return;
     }
 
+    if (file.size > MAX_BACKUP_IMPORT_SIZE) {
+      setErrorMessage("This backup file is too large. Choose a smaller file.");
+      return;
+    }
+
     try {
       const contents = await file.text();
       const result = activeService.inspectImport(contents);
@@ -138,7 +144,7 @@ export default function BackupScreen({
       setIsConfirmed(false);
       setFileInputKey((current) => current + 1);
       setStatusMessage(
-        "Backup imported. Your local Livoa data was replaced. Credentials were unchanged.",
+        "Backup imported. Your local Livoa data was replaced. Providers were disconnected; enter credentials again before using them.",
       );
     } catch {
       setErrorMessage(importFailureMessage());
@@ -167,7 +173,8 @@ export default function BackupScreen({
           <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300">
             Download your characters, personas, conversations, messages, and
             settings as one local file, or restore them on this device.
-            Credentials are never included.
+            Credentials are never included. Importing a backup disconnects
+            providers, so credentials must be entered again.
           </p>
           <Link
             href="/"
@@ -243,7 +250,8 @@ export default function BackupScreen({
               className="mt-3 text-sm leading-6 text-slate-400"
             >
               Choose a Livoa JSON backup. The file is fully validated before any
-              local data is changed.
+              local data is changed. Importing disconnects providers and removes
+              saved credentials, so enter credentials again afterward.
             </p>
             <label
               htmlFor="backup-file"
@@ -311,7 +319,8 @@ export default function BackupScreen({
                     className="text-sm leading-6 text-slate-200"
                   >
                     I understand this replaces all current Livoa content and
-                    settings. Credentials remain unchanged.
+                    settings, disconnects providers, and removes saved
+                    credentials. I will need to enter credentials again.
                   </label>
                 </div>
                 <button

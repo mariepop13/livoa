@@ -637,14 +637,21 @@ export default function ProviderSettingsScreen({
                   id="provider-configuration-id-help"
                   className="mt-1 text-sm leading-6 text-slate-400"
                 >
-                  A local name used to identify this configuration.
+                  {editingId === undefined
+                    ? "A local name used to identify this configuration."
+                    : "Configuration IDs identify saved credentials and cannot be changed after creation."}
                 </p>
                 <input
                   id="provider-configuration-id"
                   name="id"
                   className={fieldClassName}
                   value={draft.id}
-                  onChange={(event) => updateDraft("id", event.target.value)}
+                  onChange={
+                    editingId === undefined
+                      ? (event) => updateDraft("id", event.target.value)
+                      : undefined
+                  }
+                  readOnly={editingId !== undefined}
                   required
                   aria-describedby={`provider-configuration-id-help${
                     fieldError("id") === undefined

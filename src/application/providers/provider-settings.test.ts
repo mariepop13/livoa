@@ -82,6 +82,11 @@ class MemoryCredentialStore implements CredentialStore {
     this.credentials.delete(reference.configurationId);
   }
 
+  public async invalidateAll(): Promise<void> {
+    this.credentials.clear();
+    this.legacyCredentials.clear();
+  }
+
   public async hasLegacy(reference: CredentialReference): Promise<boolean> {
     return this.legacyCredentials.has(reference.providerId);
   }

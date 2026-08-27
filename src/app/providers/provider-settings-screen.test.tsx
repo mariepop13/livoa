@@ -76,6 +76,11 @@ class MemoryCredentialStore implements CredentialStore {
     this.credentials.delete(reference.configurationId);
   }
 
+  public async invalidateAll(): Promise<void> {
+    this.credentials.clear();
+    this.legacyCredentials.clear();
+  }
+
   public async hasLegacy(reference: CredentialReference): Promise<boolean> {
     return this.legacyCredentials.has(reference.providerId);
   }
@@ -658,6 +663,26 @@ describe("ProviderSettingsScreen", () => {
     expect(credentialStore.legacyCredentials.get("openrouter")).toBe(
       "legacy-credential-that-must-not-migrate",
     );
+  });
+
+  it("keeps configuration IDs immutable while editing", async () => {
+    renderScreen(createService(savedConfiguration));
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Edit openrouter-local" }),
+    );
+
+    const configurationId = screen.getByLabelText("Configuration ID");
+    expect(configurationId).toHaveAttribute("readonly");
+    expect(
+      screen.getByText(
+        "Configuration IDs identify saved credentials and cannot be changed after creation.",
+      ),
+    ).toBeVisible();
+
+    fireEvent.change(configurationId, { target: { value: "renamed" } });
+
+    expect(configurationId).toHaveValue("openrouter-local");
   });
 
   it("does not show one configuration credential as saved on another", async () => {

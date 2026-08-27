@@ -1,4 +1,6 @@
 import { z } from "zod";
+
+export const MAX_MESSAGE_CONTENT_LENGTH = 100_000;
 const dateFields = { createdAt: z.date(), updatedAt: z.date() };
 export const characterSchema = z.object({
   id: z.string().uuid(),
@@ -27,7 +29,7 @@ export const messageSchema = z.object({
   id: z.string().uuid(),
   conversationId: z.string().uuid(),
   role: z.enum(["user", "assistant", "system"]),
-  content: z.string(),
+  content: z.string().max(MAX_MESSAGE_CONTENT_LENGTH),
   model: z.string().max(200).optional(),
   provider: z.string().max(100).optional(),
   createdAt: z.date(),

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ZodError } from "zod";
 
 import {
+  MAX_MESSAGE_CONTENT_LENGTH,
   appSettingsSchema,
   characterSchema,
   conversationSchema,
@@ -137,6 +138,15 @@ describe("domain models", () => {
       providerConfigurationSchema.parse({
         ...validProviderConfiguration,
         enabled: "true",
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("bounds persisted message content", () => {
+    expect(() =>
+      messageSchema.parse({
+        ...validMessage,
+        content: "x".repeat(MAX_MESSAGE_CONTENT_LENGTH + 1),
       }),
     ).toThrow(ZodError);
   });

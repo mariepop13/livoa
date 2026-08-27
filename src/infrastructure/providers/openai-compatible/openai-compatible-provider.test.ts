@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ChatChunk, ChatRequest } from "@/domain/ports";
 import {
+  OPENAI_COMPATIBLE_STREAM_LIMITS,
   OpenAiCompatibleProvider,
   OpenAiCompatibleProviderError,
 } from "./openai-compatible-provider";
@@ -45,6 +46,21 @@ function eventStreamResponse(
         }
 
         controller.close();
+      },
+    }),
+    { headers: { "Content-Type": "text/event-stream; charset=utf-8" } },
+  );
+}
+
+function pendingEventStreamResponse(
+  chunk: Uint8Array,
+  cancel: UnderlyingSourceCancelCallback,
+): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      cancel,
+      start(controller) {
+        controller.enqueue(chunk);
       },
     }),
     { headers: { "Content-Type": "text/event-stream; charset=utf-8" } },
@@ -225,6 +241,152 @@ describe("OpenAiCompatibleProvider", () => {
         retryable: false,
       }),
     );
+  });
+
+  it("cancels raw SSE streams that exceed the buffer limit", async () => {
+    const cancel = vi.fn<UnderlyingSourceCancelCallback>();
+    const fetcher = vi.fn<Fetcher>().mockResolvedValue(
+      pendingEventStreamResponse(
+        new Uint8Array(
+          OPENAI_COMPATIBLE_STREAM_LIMITS.maxRawBufferBytes + 1,
+        ),
+        cancel,
+      ),
+    );
+
+    await expect(
+      collectChunks(createProvider(fetcher).streamChat(chatRequest)),
+    ).rejects.toMatchObject({ code: "invalid_response", retryable: false });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels SSE events that exceed the raw event limit", async () => {
+    const cancel = vi.fn<UnderlyingSourceCancelCallback>();
+    const event = `data: ${"x".repeat(
+      OPENAI_COMPATIBLE_STREAM_LIMITS.maxRawEventBytes + 1,
+    )}\n\n`;
+    const fetcher = vi.fn<Fetcher>().mockResolvedValue(
+      pendingEventStreamResponse(new TextEncoder().encode(event), cancel),
+    );
+
+    await expect(
+      collectChunks(createProvider(fetcher).streamChat(chatRequest)),
+    ).rejects.toMatchObject({ code: "invalid_response", retryable: false });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels streams whose accepted text exceeds persisted message limits", async () => {
+    const cancel = vi.fn<UnderlyingSourceCancelCallback>();
+    const event = `data: ${JSON.stringify({
+      choices: [
+        {
+          delta: {
+            content: "x".repeat(
+              OPENAI_COMPATIBLE_STREAM_LIMITS.maxOutputCharacters + 1,
+            ),
+          },
+        },
+      ],
+    })}\n\n`;
+    const fetcher = vi.fn<Fetcher>().mockResolvedValue(
+      pendingEventStreamResponse(new TextEncoder().encode(event), cancel),
+    );
+
+    await expect(
+      collectChunks(createProvider(fetcher).streamChat(chatRequest)),
+    ).rejects.toMatchObject({ code: "invalid_response", retryable: false });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels streams that exceed the accepted event limit", async () => {
+    const cancel = vi.fn<UnderlyingSourceCancelCallback>();
+    const event = 'data: {"choices":[{"delta":{"content":"x"}}]}\n\n';
+    const fetcher = vi.fn<Fetcher>().mockResolvedValue(
+      pendingEventStreamResponse(
+        new TextEncoder().encode(
+          event.repeat(OPENAI_COMPATIBLE_STREAM_LIMITS.maxEvents + 1),
+        ),
+        cancel,
+      ),
+    );
+
+    await expect(
+      collectChunks(createProvider(fetcher).streamChat(chatRequest)),
+    ).rejects.toMatchObject({ code: "invalid_response", retryable: false });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels streams that exceed the finite deadline", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const encoder = new TextEncoder();
+      const cancel = vi.fn<UnderlyingSourceCancelCallback>();
+      const stream = new ReadableStream<Uint8Array>({
+        cancel,
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
+            ),
+          );
+        },
+      });
+      const fetcher = vi.fn<Fetcher>().mockResolvedValue(
+        new Response(stream, {
+          headers: { "Content-Type": "text/event-stream" },
+        }),
+      );
+      const iterator = createProvider(fetcher)
+        .streamChat(chatRequest)
+        [Symbol.asyncIterator]();
+
+      await expect(iterator.next()).resolves.toEqual({
+        done: false,
+        value: { type: "text", content: "Hello" },
+      });
+
+      const pending = iterator.next();
+      const rejection = expect(pending).rejects.toMatchObject({
+        code: "invalid_response",
+        retryable: false,
+      });
+
+      await vi.advanceTimersByTimeAsync(
+        OPENAI_COMPATIBLE_STREAM_LIMITS.deadlineMilliseconds,
+      );
+
+      await rejection;
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects when the provider stalls before response headers past the deadline", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const fetcher = vi.fn<Fetcher>().mockReturnValue(new Promise(() => {}));
+      const iterator = createProvider(fetcher)
+        .streamChat(chatRequest)
+        [Symbol.asyncIterator]();
+
+      const pending = iterator.next();
+      const rejection = expect(pending).rejects.toMatchObject({
+        code: "invalid_response",
+        retryable: false,
+      });
+
+      await vi.advanceTimersByTimeAsync(
+        OPENAI_COMPATIBLE_STREAM_LIMITS.deadlineMilliseconds,
+      );
+
+      await rejection;
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([
