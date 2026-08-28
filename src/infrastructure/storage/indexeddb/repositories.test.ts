@@ -5,6 +5,7 @@ import type {
   AppSettings,
   Character,
   Conversation,
+  Memory,
   Message,
   Persona,
 } from "../../../domain/models";
@@ -12,14 +13,17 @@ import {
   IndexedDbAppSettingsRepository,
   IndexedDbCharacterRepository,
   IndexedDbConversationRepository,
+  IndexedDbMemoryRepository,
   IndexedDbMessageRepository,
   IndexedDbPersonaRepository,
+  createIndexedDbRepositories,
 } from "./repositories";
 import { IndexedDbRepository } from "./indexeddb-repository";
 import type {
   StoredAppSettings,
   StoredCharacter,
   StoredConversation,
+  StoredMemory,
   StoredMessage,
   StoredPersona,
 } from "./record-schemas";
@@ -93,6 +97,14 @@ const message: Message = {
   createdAt: new Date("2026-04-01T12:00:00.000Z"),
 };
 
+const memory: Memory = {
+  id: "55555555-5555-4555-8555-555555555555",
+  characterId: character.id,
+  content: "Prefers concise answers.",
+  createdAt: new Date("2026-05-01T12:00:00.000Z"),
+  updatedAt: new Date("2026-05-02T12:00:00.000Z"),
+};
+
 const settings: AppSettings = {
   theme: "dark",
   providers: [
@@ -159,6 +171,38 @@ describe("IndexedDB repository adapters", () => {
     ).resolves.toEqual(conversation);
     await expect(messageRepository.getById(message.id)).resolves.toEqual(
       message,
+    );
+  });
+
+  it("saves, lists, gets, and deletes complete memory records", async () => {
+    const table = new MemoryTable<StoredMemory>();
+    const repository = new IndexedDbMemoryRepository({ memories: table });
+
+    await repository.save(memory);
+
+    await expect(table.get(memory.id)).resolves.toMatchObject({
+      createdAt: memory.createdAt.toISOString(),
+      updatedAt: memory.updatedAt.toISOString(),
+    });
+    await expect(repository.list()).resolves.toEqual([memory]);
+    await expect(repository.getById(memory.id)).resolves.toEqual(memory);
+
+    await repository.delete(memory.id);
+
+    await expect(repository.getById(memory.id)).resolves.toBeNull();
+  });
+
+  it("rejects invalid persisted memory records at the read boundary", async () => {
+    const table = new MemoryTable<StoredMemory>();
+    const repository = new IndexedDbMemoryRepository({ memories: table });
+    table.seedRaw(memory.id, {
+      ...memory,
+      createdAt: memory.createdAt.toISOString(),
+      updatedAt: "not-a-date",
+    });
+
+    await expect(repository.getById(memory.id)).rejects.toBeInstanceOf(
+      ZodError,
     );
   });
 
@@ -287,5 +331,11 @@ describe("IndexedDB repository adapters", () => {
     await repository.delete(character.id);
 
     await expect(repository.getById(character.id)).resolves.toBeNull();
+  });
+
+  it("exposes a memory repository from the repository factory", () => {
+    const repositories = createIndexedDbRepositories();
+
+    expect(repositories.memories).toBeInstanceOf(IndexedDbMemoryRepository);
   });
 });

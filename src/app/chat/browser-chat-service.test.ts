@@ -4,6 +4,7 @@ import type {
   AppSettings,
   Character,
   Conversation,
+  Memory,
   Message,
   Persona,
 } from "@/domain/models";
@@ -73,6 +74,7 @@ function createRepositories(settings: AppSettings): IndexedDbRepositories {
     personas: new MemoryRepository<Persona>(),
     conversations: new MemoryRepository<Conversation>([conversation]),
     messages: new MemoryRepository<Message>(),
+    memories: new MemoryRepository<Memory>(),
     settings: new MemorySettingsRepository(settings),
   };
 }

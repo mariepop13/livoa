@@ -4,6 +4,7 @@ import type {
   StoredAppSettings,
   StoredCharacter,
   StoredConversation,
+  StoredMemory,
   StoredMessage,
   StoredPersona,
 } from "./record-schemas";
@@ -13,6 +14,7 @@ export class LivoaDatabase extends Dexie {
   public personas!: EntityTable<StoredPersona, "id">;
   public conversations!: EntityTable<StoredConversation, "id">;
   public messages!: EntityTable<StoredMessage, "id">;
+  public memories!: EntityTable<StoredMemory, "id">;
   public settings!: EntityTable<StoredAppSettings, "id">;
 
   public constructor() {
@@ -24,6 +26,10 @@ export class LivoaDatabase extends Dexie {
       conversations: "id, characterId, updatedAt",
       messages: "id, conversationId",
       settings: "id",
+    });
+
+    this.version(2).stores({
+      memories: "id, characterId, updatedAt",
     });
   }
 }

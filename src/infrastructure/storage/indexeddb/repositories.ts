@@ -2,17 +2,20 @@ import {
   appSettingsSchema,
   characterSchema,
   conversationSchema,
+  memorySchema,
   messageSchema,
   personaSchema,
   type AppSettings,
   type Character,
   type Conversation,
+  type Memory,
   type Message,
   type Persona,
 } from "../../../domain/models";
 import type {
   CharacterRepository,
   ConversationRepository,
+  MemoryRepository,
   MessageRepository,
   PersonaRepository,
   SettingsRepository,
@@ -26,11 +29,13 @@ import {
   SETTINGS_RECORD_ID,
   storedCharacterSchema,
   storedConversationSchema,
+  storedMemorySchema,
   storedMessageSchema,
   storedPersonaSchema,
   type StoredAppSettings,
   type StoredCharacter,
   type StoredConversation,
+  type StoredMemory,
   type StoredMessage,
   type StoredPersona,
 } from "./record-schemas";
@@ -38,11 +43,13 @@ import {
   deserializeAppSettings,
   deserializeCharacter,
   deserializeConversation,
+  deserializeMemory,
   deserializeMessage,
   deserializePersona,
   serializeAppSettings,
   serializeCharacter,
   serializeConversation,
+  serializeMemory,
   serializeMessage,
   serializePersona,
 } from "./serializers";
@@ -61,6 +68,10 @@ interface ConversationDatabase {
 
 interface MessageDatabase {
   messages: IndexedDbTable<StoredMessage>;
+}
+
+interface MemoryDatabase {
+  memories: IndexedDbTable<StoredMemory>;
 }
 
 interface SettingsDatabase {
@@ -127,6 +138,21 @@ export class IndexedDbMessageRepository
   }
 }
 
+export class IndexedDbMemoryRepository
+  extends IndexedDbRepository<Memory, StoredMemory>
+  implements MemoryRepository
+{
+  public constructor(database: MemoryDatabase = new LivoaDatabase()) {
+    super(
+      database.memories,
+      memorySchema,
+      storedMemorySchema,
+      serializeMemory,
+      deserializeMemory,
+    );
+  }
+}
+
 export class IndexedDbAppSettingsRepository implements SettingsRepository {
   private readonly table: IndexedDbTable<StoredAppSettings>;
 
@@ -150,6 +176,7 @@ export interface IndexedDbRepositories {
   personas: PersonaRepository;
   conversations: ConversationRepository;
   messages: MessageRepository;
+  memories: MemoryRepository;
   settings: SettingsRepository;
 }
 
@@ -161,6 +188,7 @@ export function createIndexedDbRepositories(
     personas: new IndexedDbPersonaRepository(database),
     conversations: new IndexedDbConversationRepository(database),
     messages: new IndexedDbMessageRepository(database),
+    memories: new IndexedDbMemoryRepository(database),
     settings: new IndexedDbAppSettingsRepository(database),
   };
 }
