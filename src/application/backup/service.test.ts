@@ -16,6 +16,7 @@ const characterId = "11111111-1111-4111-8111-111111111111";
 const personaId = "22222222-2222-4222-8222-222222222222";
 const conversationId = "33333333-3333-4333-8333-333333333333";
 
+const memoryId = "55555555-5555-4555-8555-555555555555";
 const backupData: BackupData = {
   characters: [
     {
@@ -55,6 +56,15 @@ const backupData: BackupData = {
       role: "user",
       content: "Help me plan a route.",
       createdAt: timestamp,
+    },
+  ],
+  memories: [
+    {
+      id: memoryId,
+      characterId,
+      content: "Prefers concise answers.",
+      createdAt: timestamp,
+      updatedAt: timestamp,
     },
   ],
   settings: {
@@ -197,6 +207,25 @@ describe("LocalBackupService", () => {
     expect(storage.replacement).toBeUndefined();
   });
 
+  it("rejects invalid memory records before replacing storage", async () => {
+    const storage = new MemoryBackupStorage();
+    const service = new LocalBackupService(storage, noOpCredentialInvalidator);
+    const invalidData = {
+      ...backupData,
+      memories: [
+        {
+          ...backupData.memories[0],
+          updatedAt: "not-an-iso-date",
+        },
+      ],
+    };
+
+    const result = await service.importBackup(backupContents(invalidData));
+
+    expect(result).toMatchObject({ ok: false });
+    expect(storage.replacement).toBeUndefined();
+  });
+
   it("invalidates credentials before replacing a valid backup", async () => {
     const operations: string[] = [];
     const storage = new MemoryBackupStorage(backupData, operations);
@@ -220,6 +249,32 @@ describe("LocalBackupService", () => {
     expect(result.ok).toBe(true);
     expect(operations).toEqual(["invalidate", "replace"]);
     expect(storage.replacement).toEqual(backupData);
+  });
+
+  it("imports version-1 backups without memories as an empty collection", async () => {
+    const storage = new MemoryBackupStorage();
+    const service = new LocalBackupService(storage, noOpCredentialInvalidator);
+    const historicalData = {
+      characters: backupData.characters,
+      personas: backupData.personas,
+      conversations: backupData.conversations,
+      messages: backupData.messages,
+      settings: backupData.settings,
+    };
+    const historicalContents = JSON.stringify({
+      format: BACKUP_FORMAT,
+      version: 1,
+      exportedAt: timestamp,
+      data: historicalData,
+    });
+
+    const result = await service.importBackup(historicalContents);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(storage.replacement).toEqual({
+      ...historicalData,
+      memories: [],
+    });
   });
 
   it("does not replace data when credential invalidation fails", async () => {

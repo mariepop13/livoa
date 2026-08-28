@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const MAX_MESSAGE_CONTENT_LENGTH = 100_000;
+export const MAX_MEMORY_CONTENT_LENGTH = 2_000;
 const dateFields = { createdAt: z.date(), updatedAt: z.date() };
 export const characterSchema = z.object({
   id: z.string().uuid(),
@@ -34,6 +35,12 @@ export const messageSchema = z.object({
   provider: z.string().max(100).optional(),
   createdAt: z.date(),
 });
+export const memorySchema = z.object({
+  id: z.string().uuid(),
+  characterId: z.string().uuid(),
+  content: z.string().trim().min(1).max(MAX_MEMORY_CONTENT_LENGTH),
+  ...dateFields,
+});
 export const providerConfigurationSchema = z.object({
   id: z.string().min(1),
   providerId: z.string().min(1),
@@ -49,5 +56,6 @@ export type Character = z.infer<typeof characterSchema>;
 export type Persona = z.infer<typeof personaSchema>;
 export type Conversation = z.infer<typeof conversationSchema>;
 export type Message = z.infer<typeof messageSchema>;
+export type Memory = z.infer<typeof memorySchema>;
 export type ProviderConfiguration = z.infer<typeof providerConfigurationSchema>;
 export type AppSettings = z.infer<typeof appSettingsSchema>;

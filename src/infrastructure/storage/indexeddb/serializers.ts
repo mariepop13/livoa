@@ -2,11 +2,13 @@ import {
   appSettingsSchema,
   characterSchema,
   conversationSchema,
+  memorySchema,
   messageSchema,
   personaSchema,
   type AppSettings,
   type Character,
   type Conversation,
+  type Memory,
   type Message,
   type Persona,
 } from "../../../domain/models";
@@ -16,11 +18,13 @@ import {
   storedAppSettingsSchema,
   storedCharacterSchema,
   storedConversationSchema,
+  storedMemorySchema,
   storedMessageSchema,
   storedPersonaSchema,
   type StoredAppSettings,
   type StoredCharacter,
   type StoredConversation,
+  type StoredMemory,
   type StoredMessage,
   type StoredPersona,
 } from "./record-schemas";
@@ -110,6 +114,26 @@ export function deserializeMessage(record: unknown): Message {
   return messageSchema.parse({
     ...stored,
     createdAt: deserializeDate(stored.createdAt),
+  });
+}
+
+export function serializeMemory(entity: Memory): StoredMemory {
+  const validated = memorySchema.parse(entity);
+
+  return {
+    ...validated,
+    createdAt: serializeDate(validated.createdAt),
+    updatedAt: serializeDate(validated.updatedAt),
+  };
+}
+
+export function deserializeMemory(record: unknown): Memory {
+  const stored = storedMemorySchema.parse(record);
+
+  return memorySchema.parse({
+    ...stored,
+    createdAt: deserializeDate(stored.createdAt),
+    updatedAt: deserializeDate(stored.updatedAt),
   });
 }
 

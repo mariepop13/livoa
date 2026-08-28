@@ -2,6 +2,7 @@ import type {
   AppSettings,
   Character,
   Conversation,
+  Memory,
   Message,
   Persona,
 } from "./models";
@@ -15,6 +16,7 @@ export type CharacterRepository = Repository<Character>;
 export type PersonaRepository = Repository<Persona>;
 export type ConversationRepository = Repository<Conversation>;
 export type MessageRepository = Repository<Message>;
+export type MemoryRepository = Repository<Memory>;
 export interface SettingsRepository {
   get(): Promise<AppSettings | null>;
   save(settings: AppSettings): Promise<void>;

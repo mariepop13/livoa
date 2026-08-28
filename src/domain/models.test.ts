@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import { ZodError } from "zod";
 
 import {
+  MAX_MEMORY_CONTENT_LENGTH,
   MAX_MESSAGE_CONTENT_LENGTH,
   appSettingsSchema,
   characterSchema,
   conversationSchema,
+  memorySchema,
   messageSchema,
   personaSchema,
   providerConfigurationSchema,
@@ -52,6 +54,13 @@ const validMessage = {
   createdAt: validDates.createdAt,
 };
 
+const validMemory = {
+  id: "55555555-5555-4555-8555-555555555555",
+  characterId: validCharacter.id,
+  content: "Prefers concise answers.",
+  ...validDates,
+};
+
 const validProviderConfiguration = {
   id: "provider-1",
   providerId: "openai-compatible",
@@ -68,6 +77,7 @@ describe("domain models", () => {
       validConversation,
     );
     expect(messageSchema.parse(validMessage)).toEqual(validMessage);
+    expect(memorySchema.parse(validMemory)).toEqual(validMemory);
     expect(
       providerConfigurationSchema.parse(validProviderConfiguration),
     ).toEqual(validProviderConfiguration);
@@ -115,6 +125,33 @@ describe("domain models", () => {
     ).toThrow(ZodError);
     expect(() =>
       messageSchema.parse({ ...validMessage, conversationId: "invalid" }),
+    ).toThrow(ZodError);
+  });
+
+  it("trims and validates explicitly created memories", () => {
+    expect(
+      memorySchema.parse({
+        ...validMemory,
+        content: "  Prefers concise answers.  ",
+      }),
+    ).toEqual(validMemory);
+    expect(() =>
+      memorySchema.parse({ ...validMemory, id: "invalid" }),
+    ).toThrow(ZodError);
+    expect(() =>
+      memorySchema.parse({ ...validMemory, characterId: "invalid" }),
+    ).toThrow(ZodError);
+    expect(() =>
+      memorySchema.parse({ ...validMemory, content: "   " }),
+    ).toThrow(ZodError);
+    expect(() =>
+      memorySchema.parse({
+        ...validMemory,
+        content: "x".repeat(MAX_MEMORY_CONTENT_LENGTH + 1),
+      }),
+    ).toThrow(ZodError);
+    expect(() =>
+      memorySchema.parse({ ...validMemory, updatedAt: "2026-01-01" }),
     ).toThrow(ZodError);
   });
 

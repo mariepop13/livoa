@@ -4,6 +4,7 @@ import {
   appSettingsSchema,
   characterSchema,
   conversationSchema,
+  memorySchema,
   messageSchema,
   personaSchema,
   providerConfigurationSchema,
@@ -62,6 +63,13 @@ const backupMessageSchema = messageSchema
   .extend({ createdAt: isoDateStringSchema })
   .strict();
 
+const backupMemorySchema = memorySchema
+  .extend({
+    createdAt: isoDateStringSchema,
+    updatedAt: isoDateStringSchema,
+  })
+  .strict();
+
 const backupProviderConfigurationSchema = providerConfigurationSchema
   .extend({ baseUrl: httpUrlSchema.optional() })
   .strict();
@@ -81,12 +89,21 @@ const backupDataShape = z.object({
     .array(backupConversationSchema)
     .max(MAX_BACKUP_COLLECTION_LENGTH),
   messages: z.array(backupMessageSchema).max(MAX_BACKUP_COLLECTION_LENGTH),
+  memories: z
+    .array(backupMemorySchema)
+    .max(MAX_BACKUP_COLLECTION_LENGTH)
+    .default([]),
   settings: backupSettingsSchema.nullable(),
 });
 
 function addDuplicateIdIssues(
   records: readonly { id: string }[],
-  collection: "characters" | "personas" | "conversations" | "messages",
+  collection:
+    | "characters"
+    | "personas"
+    | "conversations"
+    | "messages"
+    | "memories",
   context: z.RefinementCtx,
 ): void {
   const seenIds = new Set<string>();
@@ -111,6 +128,7 @@ export const backupDataSchema = backupDataShape
     addDuplicateIdIssues(data.personas, "personas", context);
     addDuplicateIdIssues(data.conversations, "conversations", context);
     addDuplicateIdIssues(data.messages, "messages", context);
+    addDuplicateIdIssues(data.memories, "memories", context);
   });
 
 export const backupSnapshotSchema = z

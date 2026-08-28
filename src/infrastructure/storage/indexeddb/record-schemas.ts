@@ -4,6 +4,7 @@ import {
   appSettingsSchema,
   characterSchema,
   conversationSchema,
+  memorySchema,
   messageSchema,
   personaSchema,
   providerConfigurationSchema,
@@ -50,6 +51,10 @@ export const storedConversationSchema = conversationSchema.extend({
 export const storedMessageSchema = messageSchema.extend({
   createdAt: isoDateStringSchema,
 });
+export const storedMemorySchema = memorySchema.extend({
+  createdAt: isoDateStringSchema,
+  updatedAt: isoDateStringSchema,
+});
 
 export const storedAppSettingsSchema = appSettingsSchema.extend({
   providers: z.array(
@@ -64,4 +69,5 @@ export type StoredCharacter = z.infer<typeof storedCharacterSchema>;
 export type StoredPersona = z.infer<typeof storedPersonaSchema>;
 export type StoredConversation = z.infer<typeof storedConversationSchema>;
 export type StoredMessage = z.infer<typeof storedMessageSchema>;
+export type StoredMemory = z.infer<typeof storedMemorySchema>;
 export type StoredAppSettings = z.infer<typeof storedAppSettingsSchema>;

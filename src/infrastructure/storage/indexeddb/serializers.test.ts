@@ -5,6 +5,7 @@ import type {
   AppSettings,
   Character,
   Conversation,
+  Memory,
   Message,
   Persona,
 } from "../../../domain/models";
@@ -12,11 +13,13 @@ import {
   deserializeAppSettings,
   deserializeCharacter,
   deserializeConversation,
+  deserializeMemory,
   deserializeMessage,
   deserializePersona,
   serializeAppSettings,
   serializeCharacter,
   serializeConversation,
+  serializeMemory,
   serializeMessage,
   serializePersona,
 } from "./serializers";
@@ -58,6 +61,14 @@ const message: Message = {
   model: "test-model",
   provider: "test-provider",
   createdAt: new Date("2026-04-01T12:00:00.000Z"),
+};
+
+const memory: Memory = {
+  id: "55555555-5555-4555-8555-555555555555",
+  characterId: character.id,
+  content: "Prefers concise answers.",
+  createdAt: new Date("2026-05-01T12:00:00.000Z"),
+  updatedAt: new Date("2026-05-02T12:00:00.000Z"),
 };
 
 const settings: AppSettings = {
@@ -105,6 +116,14 @@ describe("IndexedDB serializers", () => {
     expect(deserializeMessage(stored)).toEqual(message);
   });
 
+  it("round-trips Memory dates as canonical persisted strings", () => {
+    const stored = serializeMemory(memory);
+
+    expect(stored.createdAt).toBe(memory.createdAt.toISOString());
+    expect(stored.updatedAt).toBe(memory.updatedAt.toISOString());
+    expect(deserializeMemory(stored)).toEqual(memory);
+  });
+
   it("round-trips AppSettings through its persisted record shape", () => {
     const stored = serializeAppSettings(settings);
 
@@ -123,6 +142,15 @@ describe("IndexedDB serializers", () => {
         ...serializeMessage(message),
         createdAt: "2026-04-01T12:00:00Z",
       }),
+    ).toThrow(ZodError);
+    expect(() =>
+      deserializeMemory({
+        ...serializeMemory(memory),
+        updatedAt: "2026-05-02T12:00:00Z",
+      }),
+    ).toThrow(ZodError);
+    expect(() =>
+      deserializeMemory({ ...serializeMemory(memory), content: "   " }),
     ).toThrow(ZodError);
   });
 
