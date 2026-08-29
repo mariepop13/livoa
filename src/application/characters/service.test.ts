@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { Character } from "../../domain/models";
-import type { CharacterRepository } from "../../domain/ports";
+import type {
+  CharacterMemoryDeletionRepository,
+  CharacterRepository,
+} from "../../domain/ports";
 import {
   createCharacter,
   createCharacterApplicationService,
@@ -26,7 +29,9 @@ const character: Character = {
   updatedAt: timestamp,
 };
 
-class MemoryCharacterRepository implements CharacterRepository {
+class MemoryCharacterRepository
+  implements CharacterRepository, CharacterMemoryDeletionRepository
+{
   private readonly characters = new Map<string, Character>();
 
   public listCalls = 0;
@@ -75,6 +80,10 @@ class MemoryCharacterRepository implements CharacterRepository {
     }
     this.characters.delete(id);
   }
+
+  public async deleteCharacterAndMemories(id: string): Promise<void> {
+    await this.delete(id);
+  }
 }
 
 const createInput = {
@@ -88,7 +97,7 @@ const createInput = {
 describe("character application service", () => {
   it("creates, lists, updates, and deletes characters through the repository port", async () => {
     const repository = new MemoryCharacterRepository();
-    const service = createCharacterApplicationService(repository, {
+    const service = createCharacterApplicationService(repository, repository, {
       generateId: () => secondCharacterId,
       now: () => timestamp,
     });
@@ -154,7 +163,11 @@ describe("character application service", () => {
       ...createInput,
       id: "not-a-uuid",
     });
-    const invalidDelete = await deleteCharacter(repository, "not-a-uuid");
+    const invalidDelete = await deleteCharacter(
+      repository,
+      repository,
+      "not-a-uuid",
+    );
 
     expect(invalidCreate).toMatchObject({
       ok: false,
@@ -182,7 +195,9 @@ describe("character application service", () => {
       ok: false,
       error: { kind: "not_found", code: "NOT_FOUND", id: characterId },
     });
-    await expect(deleteCharacter(repository, characterId)).resolves.toEqual({
+    await expect(
+      deleteCharacter(repository, repository, characterId),
+    ).resolves.toEqual({
       ok: false,
       error: { kind: "not_found", code: "NOT_FOUND", id: characterId },
     });
@@ -229,7 +244,7 @@ describe("character application service", () => {
     repository.listFailure = null;
     repository.deleteFailure = new Error(secret);
     await expect(
-      deleteCharacter(repository, characterId),
+      deleteCharacter(repository, repository, characterId),
     ).resolves.toMatchObject({
       ok: false,
       error: {
@@ -241,7 +256,7 @@ describe("character application service", () => {
         },
       },
     });
-    const result = await deleteCharacter(repository, characterId);
+    const result = await deleteCharacter(repository, repository, characterId);
     expect(result.ok).toBe(false);
     if (!result.ok && result.error.kind === "application") {
       expect(result.error.error.message).not.toContain(secret);

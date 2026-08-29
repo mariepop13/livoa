@@ -20,6 +20,7 @@ const service: BackupApplicationService = {
         personas: 0,
         conversations: 0,
         messages: 0,
+        memories: 0,
         hasSettings: false,
       },
     };
@@ -32,6 +33,7 @@ const service: BackupApplicationService = {
         personas: 0,
         conversations: 0,
         messages: 0,
+        memories: 0,
         hasSettings: false,
       },
     };
@@ -73,5 +75,19 @@ describe("BackupScreen", () => {
         /Importing a backup disconnects providers, so credentials must be entered again\./,
       ),
     ).toBeVisible();
+  });
+
+  it("discloses memory records before import", async () => {
+    const file = new File(["{}"], "backup.json", {
+      type: "application/json",
+    });
+    Object.defineProperty(file, "text", { value: async () => "{}" });
+
+    render(<BackupScreen service={service} />);
+    fireEvent.change(screen.getByLabelText("Backup file"), {
+      target: { files: [file] },
+    });
+
+    expect(await screen.findByText("0 memories")).toBeVisible();
   });
 });

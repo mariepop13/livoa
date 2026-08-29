@@ -11,8 +11,10 @@ import type {
 } from "../../../domain/models";
 import {
   IndexedDbAppSettingsRepository,
+  IndexedDbCharacterMemoryDeletionRepository,
   IndexedDbCharacterRepository,
   IndexedDbConversationRepository,
+  IndexedDbMemoryCharacterWriteRepository,
   IndexedDbMemoryRepository,
   IndexedDbMessageRepository,
   IndexedDbPersonaRepository,
@@ -119,6 +121,143 @@ const settings: AppSettings = {
 };
 
 describe("IndexedDB repository adapters", () => {
+  it("deletes a character and its memories in one transaction", async () => {
+    const characterIds = new Set([character.id]);
+    const memoryCharacterIds = new Set([memory.characterId]);
+    let transactions = 0;
+    const characterTable = {
+      delete: async (id: string) => {
+        characterIds.delete(id);
+      },
+    };
+    const memoryTable = {
+      where: () => ({
+        equals: (id: string) => ({
+          delete: async () => {
+            memoryCharacterIds.delete(id);
+          },
+        }),
+      }),
+    };
+    const transaction = {
+      execute: async (work: () => Promise<void>) => {
+        transactions += 1;
+        await work();
+      },
+    };
+    const repository = new IndexedDbCharacterMemoryDeletionRepository(
+      transaction,
+      characterTable,
+      memoryTable,
+    );
+
+    await repository.deleteCharacterAndMemories(character.id);
+
+    expect(transactions).toBe(1);
+    expect(characterIds).not.toContain(character.id);
+    expect(memoryCharacterIds).not.toContain(character.id);
+  });
+
+  it("keeps both records when the cascade transaction fails", async () => {
+    const characterIds = new Set([character.id]);
+    const memoryCharacterIds = new Set([memory.characterId]);
+    const characterTable = {
+      delete: async () => {
+        throw new Error("character write failed");
+      },
+    };
+    const memoryTable = {
+      where: () => ({
+        equals: (id: string) => ({
+          delete: async () => {
+            memoryCharacterIds.delete(id);
+          },
+        }),
+      }),
+    };
+    const transaction = {
+      execute: async (work: () => Promise<void>) => {
+        const memorySnapshot = new Set(memoryCharacterIds);
+        try {
+          await work();
+        } catch (error: unknown) {
+          memoryCharacterIds.clear();
+          for (const id of memorySnapshot) {
+            memoryCharacterIds.add(id);
+          }
+          throw error;
+        }
+      },
+    };
+    const repository = new IndexedDbCharacterMemoryDeletionRepository(
+      transaction,
+      characterTable,
+      memoryTable,
+    );
+
+    await expect(
+      repository.deleteCharacterAndMemories(character.id),
+    ).rejects.toThrow("character write failed");
+    expect(characterIds).toContain(character.id);
+    expect(memoryCharacterIds).toContain(character.id);
+  });
+
+  it("checks a character and writes its memory in one transaction", async () => {
+    const characterTable = new MemoryTable<StoredCharacter>();
+    const memoryTable = new MemoryTable<StoredMemory>();
+    await new IndexedDbCharacterRepository({ characters: characterTable }).save(
+      character,
+    );
+    let transactions = 0;
+    let isInTransaction = false;
+    const transaction = {
+      async execute<T>(work: () => Promise<T>): Promise<T> {
+        transactions += 1;
+        isInTransaction = true;
+        try {
+          return await work();
+        } finally {
+          isInTransaction = false;
+        }
+      },
+    };
+    const repository = new IndexedDbMemoryCharacterWriteRepository(
+      transaction,
+      {
+        get: async (id: string) => {
+          expect(isInTransaction).toBe(true);
+          return characterTable.get(id);
+        },
+      },
+      {
+        put: async (record: StoredMemory) => {
+          expect(isInTransaction).toBe(true);
+          return memoryTable.put(record);
+        },
+      },
+    );
+
+    await expect(repository.saveForExistingCharacter(memory)).resolves.toEqual({
+      kind: "saved",
+    });
+
+    expect(transactions).toBe(1);
+    await expect(memoryTable.get(memory.id)).resolves.toMatchObject({
+      id: memory.id,
+      characterId: character.id,
+    });
+
+    const orphanMemory: Memory = {
+      ...memory,
+      id: "66666666-6666-4666-8666-666666666666",
+      characterId: "77777777-7777-4777-8777-777777777777",
+    };
+    await expect(
+      repository.saveForExistingCharacter(orphanMemory),
+    ).resolves.toEqual({ kind: "character_not_found" });
+    await expect(memoryTable.get(orphanMemory.id)).resolves.toBeUndefined();
+    expect(transactions).toBe(2);
+  });
   it("round-trips Character dates as persisted strings", async () => {
     const table = new MemoryTable<StoredCharacter>();
     const repository = new IndexedDbCharacterRepository({ characters: table });

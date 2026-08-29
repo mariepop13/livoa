@@ -201,6 +201,7 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
     const repositories = options.repositories ?? createIndexedDbRepositories();
     this.#characterService = createCharacterApplicationService(
       repositories.characters,
+      repositories.characterMemoryDeletion,
     );
     this.#personaService = createPersonaApplicationService(
       repositories.personas,
@@ -370,7 +371,10 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
       throw new ChatAdapterError(result.error.message);
     }
 
-    const configuredProvider = selectSendableProvider(result.data, this.#storage);
+    const configuredProvider = selectSendableProvider(
+      result.data,
+      this.#storage,
+    );
 
     return configuredProvider === undefined
       ? "Provider unavailable"
@@ -395,7 +399,10 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
       throw new ChatAdapterError(result.error.message);
     }
 
-    const configuredProvider = selectSendableProvider(result.data, this.#storage);
+    const configuredProvider = selectSendableProvider(
+      result.data,
+      this.#storage,
+    );
 
     if (configuredProvider === undefined) {
       throw new ChatAdapterError(

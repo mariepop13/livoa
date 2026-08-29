@@ -6,7 +6,10 @@ import {
   type CharacterApplicationService,
 } from "@/application/characters";
 import type { Character } from "@/domain/models";
-import type { CharacterRepository } from "@/domain/ports";
+import type {
+  CharacterMemoryDeletionRepository,
+  CharacterRepository,
+} from "@/domain/ports";
 
 import CharacterManagementScreen from "./character-management-screen";
 
@@ -26,7 +29,9 @@ const savedCharacter: Character = {
   updatedAt: timestamp,
 };
 
-class MemoryCharacterRepository implements CharacterRepository {
+class MemoryCharacterRepository
+  implements CharacterRepository, CharacterMemoryDeletionRepository
+{
   private readonly characters = new Map<string, Character>();
 
   public constructor(initialCharacters: readonly Character[] = []) {
@@ -50,18 +55,21 @@ class MemoryCharacterRepository implements CharacterRepository {
   public async delete(id: string): Promise<void> {
     this.characters.delete(id);
   }
+
+  public async deleteCharacterAndMemories(id: string): Promise<void> {
+    await this.delete(id);
+  }
 }
 
 function createService(
   initialCharacters: readonly Character[] = [],
 ): CharacterApplicationService {
-  return createCharacterApplicationService(
-    new MemoryCharacterRepository(initialCharacters),
-    {
-      generateId: () => createdCharacterId,
-      now: () => timestamp,
-    },
-  );
+  const repository = new MemoryCharacterRepository(initialCharacters);
+
+  return createCharacterApplicationService(repository, repository, {
+    generateId: () => createdCharacterId,
+    now: () => timestamp,
+  });
 }
 
 function fillCharacterForm(name = "Grace Hopper"): void {

@@ -1,7 +1,10 @@
 import { z, type ZodError } from "zod";
 
 import { characterSchema, type Character } from "../../domain/models";
-import type { CharacterRepository } from "../../domain/ports";
+import type {
+  CharacterMemoryDeletionRepository,
+  CharacterRepository,
+} from "../../domain/ports";
 import { normalizeApplicationError } from "../error";
 import {
   characterIdSchema,
@@ -151,6 +154,7 @@ export async function updateCharacter(
 
 export async function deleteCharacter(
   repository: CharacterRepository,
+  deletionRepository: CharacterMemoryDeletionRepository,
   id: unknown,
 ): Promise<CharacterUseCaseResult<void>> {
   const parsedId = characterIdSchema.safeParse(id);
@@ -168,7 +172,7 @@ export async function deleteCharacter(
   }
 
   try {
-    await repository.delete(parsedId.data);
+    await deletionRepository.deleteCharacterAndMemories(parsedId.data);
     return success(undefined);
   } catch (error: unknown) {
     return applicationFailure(error, "delete");
@@ -177,13 +181,14 @@ export async function deleteCharacter(
 
 export function createCharacterApplicationService(
   repository: CharacterRepository,
+  deletionRepository: CharacterMemoryDeletionRepository,
   dependencies: CharacterUseCaseDependencies = {},
 ): CharacterApplicationService {
   return {
     create: (input) => createCharacter(repository, input, dependencies),
     list: () => listCharacters(repository),
     update: (input) => updateCharacter(repository, input, dependencies),
-    delete: (id) => deleteCharacter(repository, id),
+    delete: (id) => deleteCharacter(repository, deletionRepository, id),
   };
 }
 
