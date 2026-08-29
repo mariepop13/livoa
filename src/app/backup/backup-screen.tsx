@@ -44,7 +44,10 @@ function importFailureMessage(): string {
 }
 
 function formatCount(count: number, singular: string): string {
-  return `${count} ${singular}${count === 1 ? "" : "s"}`;
+  const plural = singular.endsWith("y")
+    ? `${singular.slice(0, -1)}ies`
+    : `${singular}s`;
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 export default function BackupScreen({
@@ -171,10 +174,10 @@ export default function BackupScreen({
             Back up and restore Livoa.
           </h1>
           <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300">
-            Download your characters, personas, conversations, messages, and
-            settings as one local file, or restore them on this device.
-            Credentials are never included. Importing a backup disconnects
-            providers, so credentials must be entered again.
+            Download your characters, personas, conversations, messages,
+            memories, and settings as one local file, or restore them on this
+            device. Credentials are never included. Importing a backup
+            disconnects providers, so credentials must be entered again.
           </p>
           <Link
             href="/"
@@ -300,6 +303,9 @@ export default function BackupScreen({
                   </li>
                   <li>
                     {formatCount(pendingImport.preview.messages, "message")}
+                  </li>
+                  <li>
+                    {formatCount(pendingImport.preview.memories, "memory")}
                   </li>
                   <li className="col-span-2">
                     Settings:{" "}

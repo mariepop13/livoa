@@ -19,6 +19,7 @@ export type BackupPreview = Readonly<{
   personas: number;
   conversations: number;
   messages: number;
+  memories: number;
   hasSettings: boolean;
 }>;
 
@@ -101,6 +102,7 @@ function previewFromSnapshot(snapshot: BackupSnapshot): BackupPreview {
     personas: snapshot.data.personas.length,
     conversations: snapshot.data.conversations.length,
     messages: snapshot.data.messages.length,
+    memories: snapshot.data.memories.length,
     hasSettings: snapshot.data.settings !== null,
   };
 }

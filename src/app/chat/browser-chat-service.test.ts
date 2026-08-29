@@ -69,8 +69,18 @@ const conversation: Conversation = {
 };
 
 function createRepositories(settings: AppSettings): IndexedDbRepositories {
+  const characters = new MemoryRepository<Character>([character]);
+
   return {
-    characters: new MemoryRepository<Character>([character]),
+    characters,
+    characterMemoryDeletion: {
+      deleteCharacterAndMemories: async (id: string) => {
+        await characters.delete(id);
+      },
+    },
+    memoryCharacterWrite: {
+      saveForExistingCharacter: async () => ({ kind: "saved" }),
+    },
     personas: new MemoryRepository<Persona>(),
     conversations: new MemoryRepository<Conversation>([conversation]),
     messages: new MemoryRepository<Message>(),

@@ -13,6 +13,18 @@ export interface Repository<T> {
   delete(id: string): Promise<void>;
 }
 export type CharacterRepository = Repository<Character>;
+
+export interface CharacterMemoryDeletionRepository {
+  deleteCharacterAndMemories(characterId: string): Promise<void>;
+}
+
+export type MemoryCharacterWriteResult =
+  { kind: "saved" } | { kind: "character_not_found" };
+
+export interface MemoryCharacterWriteRepository {
+  saveForExistingCharacter(memory: Memory): Promise<MemoryCharacterWriteResult>;
+}
+
 export type PersonaRepository = Repository<Persona>;
 export type ConversationRepository = Repository<Conversation>;
 export type MessageRepository = Repository<Message>;

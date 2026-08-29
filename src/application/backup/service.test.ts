@@ -240,6 +240,7 @@ describe("LocalBackupService", () => {
         personas: 1,
         conversations: 1,
         messages: 1,
+        memories: 1,
         hasSettings: true,
       },
     });

@@ -13,8 +13,11 @@ import {
   type Persona,
 } from "../../../domain/models";
 import type {
+  CharacterMemoryDeletionRepository,
   CharacterRepository,
   ConversationRepository,
+  MemoryCharacterWriteRepository,
+  MemoryCharacterWriteResult,
   MemoryRepository,
   MessageRepository,
   PersonaRepository,
@@ -76,6 +79,72 @@ interface MemoryDatabase {
 
 interface SettingsDatabase {
   settings: IndexedDbTable<StoredAppSettings>;
+}
+
+interface CharacterTable {
+  delete(id: string): Promise<void>;
+}
+
+interface CharacterMemoryTable {
+  where(index: "characterId"): {
+    equals(characterId: string): { delete(): Promise<unknown> };
+  };
+}
+
+interface CharacterMemoryWriteTable {
+  get(id: string): Promise<StoredCharacter | undefined>;
+}
+
+interface MemoryCharacterWriteTable {
+  put(record: StoredMemory): Promise<unknown>;
+}
+
+interface CharacterMemoryDeletionTransaction {
+  execute(work: () => Promise<void>): Promise<void>;
+}
+
+interface CharacterMemoryWriteTransaction {
+  execute<T>(work: () => Promise<T>): Promise<T>;
+}
+
+export class IndexedDbCharacterMemoryDeletionRepository implements CharacterMemoryDeletionRepository {
+  public constructor(
+    private readonly transaction: CharacterMemoryDeletionTransaction,
+    private readonly characters: CharacterTable,
+    private readonly memories: CharacterMemoryTable,
+  ) {}
+
+  public async deleteCharacterAndMemories(characterId: string): Promise<void> {
+    await this.transaction.execute(async () => {
+      await this.memories.where("characterId").equals(characterId).delete();
+      await this.characters.delete(characterId);
+    });
+  }
+}
+
+export class IndexedDbMemoryCharacterWriteRepository implements MemoryCharacterWriteRepository {
+  public constructor(
+    private readonly transaction: CharacterMemoryWriteTransaction,
+    private readonly characters: CharacterMemoryWriteTable,
+    private readonly memories: MemoryCharacterWriteTable,
+  ) {}
+
+  public async saveForExistingCharacter(
+    memory: Memory,
+  ): Promise<MemoryCharacterWriteResult> {
+    const storedMemory = storedMemorySchema.parse(
+      serializeMemory(memorySchema.parse(memory)),
+    );
+
+    return this.transaction.execute<MemoryCharacterWriteResult>(async () => {
+      if ((await this.characters.get(memory.characterId)) === undefined) {
+        return { kind: "character_not_found" };
+      }
+
+      await this.memories.put(storedMemory);
+      return { kind: "saved" };
+    });
+  }
 }
 
 export class IndexedDbCharacterRepository
@@ -173,6 +242,8 @@ export class IndexedDbAppSettingsRepository implements SettingsRepository {
 
 export interface IndexedDbRepositories {
   characters: CharacterRepository;
+  characterMemoryDeletion: CharacterMemoryDeletionRepository;
+  memoryCharacterWrite: MemoryCharacterWriteRepository;
   personas: PersonaRepository;
   conversations: ConversationRepository;
   messages: MessageRepository;
@@ -183,8 +254,27 @@ export interface IndexedDbRepositories {
 export function createIndexedDbRepositories(
   database: LivoaDatabase = new LivoaDatabase(),
 ): IndexedDbRepositories {
+  const characterMemoryTransaction: CharacterMemoryWriteTransaction = {
+    execute: (work) =>
+      database.transaction(
+        "rw",
+        [database.characters, database.memories],
+        work,
+      ),
+  };
+
   return {
     characters: new IndexedDbCharacterRepository(database),
+    characterMemoryDeletion: new IndexedDbCharacterMemoryDeletionRepository(
+      characterMemoryTransaction,
+      database.characters,
+      database.memories,
+    ),
+    memoryCharacterWrite: new IndexedDbMemoryCharacterWriteRepository(
+      characterMemoryTransaction,
+      database.characters,
+      database.memories,
+    ),
     personas: new IndexedDbPersonaRepository(database),
     conversations: new IndexedDbConversationRepository(database),
     messages: new IndexedDbMessageRepository(database),

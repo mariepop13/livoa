@@ -7,5 +7,8 @@ import { createIndexedDbRepositories } from "@/infrastructure/storage/indexeddb/
 export function createBrowserCharacterService(): CharacterApplicationService {
   const repositories = createIndexedDbRepositories();
 
-  return createCharacterApplicationService(repositories.characters);
+  return createCharacterApplicationService(
+    repositories.characters,
+    repositories.characterMemoryDeletion,
+  );
 }
