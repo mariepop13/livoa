@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createCharacterApplicationService } from "@/application/characters";
@@ -23,6 +29,42 @@ const character: Character = {
   description: "A patient guide.",
   personality: "Thoughtful.",
   systemPrompt: "Be helpful.",
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+
+const secondCharacterId = "33333333-3333-4333-8333-333333333333";
+const emptyCharacterId = "44444444-4444-4444-8444-444444444444";
+const olderMemoryCreatedAt = new Date("2026-08-26T08:00:00.000Z");
+const newerMemoryCreatedAt = new Date("2026-08-27T09:00:00.000Z");
+const secondCharacter: Character = {
+  ...character,
+  id: secondCharacterId,
+  name: "Bram",
+};
+const emptyCharacter: Character = {
+  ...character,
+  id: emptyCharacterId,
+  name: "Cora",
+};
+const olderMemory: Memory = {
+  id: memoryId,
+  characterId,
+  content: "Older Astra memory.",
+  createdAt: olderMemoryCreatedAt,
+  updatedAt: timestamp,
+};
+const newerMemory: Memory = {
+  id: "55555555-5555-4555-8555-555555555555",
+  characterId,
+  content: "Newer Astra memory.",
+  createdAt: newerMemoryCreatedAt,
+  updatedAt: timestamp,
+};
+const secondCharacterMemory: Memory = {
+  id: "66666666-6666-4666-8666-666666666666",
+  characterId: secondCharacterId,
+  content: "Bram's memory.",
   createdAt: timestamp,
   updatedAt: timestamp,
 };
@@ -55,8 +97,9 @@ class InMemoryRepository<T extends { id: string }> implements Repository<T> {
 
 function createServices(
   initialMemories: readonly Memory[] = [],
+  initialCharacters: readonly Character[] = [character],
 ): BrowserMemoryServices {
-  const characters = new InMemoryRepository<Character>([character]);
+  const characters = new InMemoryRepository<Character>(initialCharacters);
   const memories = new InMemoryRepository<Memory>(initialMemories);
   const deletionRepository: CharacterMemoryDeletionRepository = {
     async deleteCharacterAndMemories(id: string): Promise<void> {
@@ -112,6 +155,7 @@ describe("MemoryManagementScreen", () => {
       "Memory created.",
     );
     expect(screen.getByText("Prefers concise answers.")).toBeVisible();
+    expect(screen.getByLabelText("Character")).toHaveValue(characterId);
     expect(
       screen.getByRole("button", {
         name: "Delete memory 1: Prefers concise answers.",
@@ -134,6 +178,62 @@ describe("MemoryManagementScreen", () => {
       "Memory updated.",
     );
     expect(screen.getByText("Prefers direct answers.")).toBeVisible();
+  });
+
+  it("filters memories by active character in created order with distinct empty states", async () => {
+    render(
+      <MemoryManagementScreen
+        services={createServices(
+          [olderMemory, secondCharacterMemory, newerMemory],
+          [character, secondCharacter, emptyCharacter],
+        )}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "Create a memory" });
+    expect(
+      screen.getByText("Choose a character to view its memories."),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("list", { name: "Saved memories list" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Character"), {
+      target: { value: characterId },
+    });
+
+    const savedMemories = screen.getByRole("list", {
+      name: "Saved memories list",
+    });
+    const memoryItems = within(savedMemories).getAllByRole("listitem");
+    expect(memoryItems).toHaveLength(2);
+    expect(memoryItems[0]).toHaveTextContent("Newer Astra memory.");
+    expect(memoryItems[1]).toHaveTextContent("Older Astra memory.");
+    const createdAt = memoryItems[0]?.querySelector("time");
+    if (createdAt === null || createdAt === undefined) {
+      throw new Error(
+        "Expected the newest memory to expose its creation time.",
+      );
+    }
+    expect(createdAt).toHaveAttribute(
+      "dateTime",
+      newerMemoryCreatedAt.toISOString(),
+    );
+    expect(createdAt).toHaveTextContent(
+      `Created ${newerMemoryCreatedAt.toLocaleString()}`,
+    );
+    expect(screen.queryByText("Bram's memory.")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Character"), {
+      target: { value: secondCharacterId },
+    });
+    expect(screen.getByText("Bram's memory.")).toBeVisible();
+    expect(screen.queryByText("Newer Astra memory.")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Character"), {
+      target: { value: emptyCharacterId },
+    });
+    expect(screen.getByText("No memories saved for Cora yet")).toBeVisible();
   });
 
   it("shows field-level feedback for missing character selection and content", async () => {
