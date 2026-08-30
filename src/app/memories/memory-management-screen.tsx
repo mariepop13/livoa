@@ -180,7 +180,10 @@ export default function MemoryManagementScreen({
   }
 
   function startCreating(): void {
-    setDraft(emptyDraft);
+    setDraft((current) => ({
+      ...emptyDraft,
+      characterId: current.characterId,
+    }));
     setEditingId(undefined);
     setFieldIssues([]);
     setScreenError(undefined);
@@ -246,7 +249,10 @@ export default function MemoryManagementScreen({
               memory.id === result.data.id ? result.data : memory,
             );
       });
-      setDraft(emptyDraft);
+      setDraft((current) => ({
+        ...emptyDraft,
+        characterId: current.characterId,
+      }));
       setEditingId(undefined);
       setStatusMessage(
         editingId === undefined ? "Memory created." : "Memory updated.",
@@ -334,6 +340,20 @@ export default function MemoryManagementScreen({
       </main>
     );
   }
+
+  const selectedCharacter = characters.find(
+    (character) => character.id === draft.characterId,
+  );
+  const selectedMemories =
+    selectedCharacter === undefined
+      ? []
+      : memories
+          .filter((memory) => memory.characterId === selectedCharacter.id)
+          .sort(
+            (firstMemory, secondMemory) =>
+              secondMemory.createdAt.getTime() -
+              firstMemory.createdAt.getTime(),
+          );
 
   return (
     <main
@@ -570,28 +590,40 @@ export default function MemoryManagementScreen({
                   Saved memories
                 </h2>
               </div>
-              {memories.length > 0 ? (
+              {selectedMemories.length > 0 ? (
                 <p className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1 text-xs font-semibold text-slate-300">
-                  {memories.length} saved{" "}
-                  {memories.length === 1 ? "memory" : "memories"}
+                  {selectedMemories.length} saved{" "}
+                  {selectedMemories.length === 1 ? "memory" : "memories"}
                 </p>
               ) : null}
             </div>
-            {memories.length === 0 ? (
+            {selectedCharacter === undefined ? (
               <div
                 className="mt-6 rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 p-5"
                 aria-live="polite"
               >
                 <p className="font-semibold text-slate-100">
-                  No memories saved yet
+                  Choose a character to view its memories.
                 </p>
                 <p className="mt-2 text-sm leading-6 text-slate-400">
-                  Add a local note for one of your characters.
+                  Select a character above to see and manage its local notes.
+                </p>
+              </div>
+            ) : selectedMemories.length === 0 ? (
+              <div
+                className="mt-6 rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 p-5"
+                aria-live="polite"
+              >
+                <p className="font-semibold text-slate-100">
+                  No memories saved for {selectedCharacter.name} yet
+                </p>
+                <p className="mt-2 text-sm leading-6 text-slate-400">
+                  Add a local note for this character.
                 </p>
               </div>
             ) : (
               <ul className="mt-6 space-y-3" aria-label="Saved memories list">
-                {memories.map((memory, index) => (
+                {selectedMemories.map((memory, index) => (
                   <li
                     key={memory.id}
                     className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4"
@@ -602,6 +634,12 @@ export default function MemoryManagementScreen({
                     <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">
                       {memory.content}
                     </p>
+                    <time
+                      className="mt-3 block text-xs text-slate-400"
+                      dateTime={memory.createdAt.toISOString()}
+                    >
+                      Created {memory.createdAt.toLocaleString()}
+                    </time>
                     <div className="mt-4 flex flex-wrap gap-3">
                       <button
                         type="button"
