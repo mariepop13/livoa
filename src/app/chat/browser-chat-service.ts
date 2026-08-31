@@ -7,6 +7,10 @@ import {
   type PersonaApplicationService,
 } from "@/application/personas";
 import {
+  createMemoryContextMessage,
+  MemorySettingsService,
+} from "@/application/memories";
+import {
   createConversationApplicationService,
   type ConversationApplicationService,
   type ConversationUseCaseResult,
@@ -180,9 +184,11 @@ function selectSendableProvider(
 function chatMessages(
   character: Character,
   messages: readonly Message[],
+  memoryContext: ChatMessage | undefined,
 ): ChatMessage[] {
   return [
     { role: "system", content: character.systemPrompt },
+    ...(memoryContext === undefined ? [] : [memoryContext]),
     ...messages.map(({ role, content }) => ({ role, content })),
   ];
 }
@@ -193,6 +199,8 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
   readonly #conversationService: ConversationApplicationService;
   readonly #contextAssembler = createConversationContextAssembler();
   readonly #providerSettings: ProviderSettingsService;
+  readonly #memorySettings: MemorySettingsService;
+  readonly #memories: IndexedDbRepositories["memories"];
   readonly #conversations: IndexedDbRepositories["conversations"];
   readonly #storage: Storage;
   readonly #testDouble: ChatTestDoubleMode | undefined;
@@ -215,6 +223,8 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
       new WebStorageCredentialStore(options.storage ?? window.localStorage),
     );
     this.#conversations = repositories.conversations;
+    this.#memorySettings = new MemorySettingsService(repositories.settings);
+    this.#memories = repositories.memories;
     this.#storage = options.storage ?? window.localStorage;
     this.#testDouble = options.testDouble;
   }
@@ -305,9 +315,14 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
       }
 
       const configuredProvider = await this.#providerForMessage();
+      const memoryContext = await this.#memoryContext(input.character.id);
       const request: ChatRequest = {
         model: configuredProvider.model,
-        messages: chatMessages(input.character, contextResult.data.messages),
+        messages: chatMessages(
+          input.character,
+          contextResult.data.messages,
+          memoryContext,
+        ),
       };
       const assistantContent = await this.#readAssistantResponse(
         configuredProvider.provider,
@@ -411,6 +426,18 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
     }
 
     return configuredProvider;
+  }
+
+  async #memoryContext(characterId: string): Promise<ChatMessage | undefined> {
+    const settings = await this.#memorySettings.load();
+    if (!settings.ok) {
+      throw new ChatAdapterError(settings.error.message);
+    }
+    if (!settings.data.memoryContextEnabled) {
+      return undefined;
+    }
+
+    return createMemoryContextMessage(await this.#memories.list(), characterId);
   }
 
   async #readAssistantResponse(

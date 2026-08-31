@@ -21,10 +21,9 @@ export const characterCardAvatarSchema = z.object({
   mediaType: z.enum(["image/png", "image/apng"]),
   bytes: z
     .instanceof(Uint8Array)
-    .refine(
-      (value) => value.byteLength <= CHARACTER_CARD_MAX_AVATAR_BYTES,
-      { message: "Avatar exceeds the character-card file limit" },
-    ),
+    .refine((value) => value.byteLength <= CHARACTER_CARD_MAX_AVATAR_BYTES, {
+      message: "Avatar exceeds the character-card file limit",
+    }),
 });
 export const characterCardSchema = z.object({
   characterId: z.string().uuid(),
@@ -61,9 +60,11 @@ export const messageSchema = z.object({
   provider: z.string().max(100).optional(),
   createdAt: z.date(),
 });
+export const memorySubjectSchema = z.enum(["user", "character", "scenario"]);
 export const memorySchema = z.object({
   id: z.string().uuid(),
   characterId: z.string().uuid(),
+  subject: memorySubjectSchema.default("user"),
   content: z.string().trim().min(1).max(MAX_MEMORY_CONTENT_LENGTH),
   ...dateFields,
 });
@@ -77,12 +78,15 @@ export const providerConfigurationSchema = z.object({
 export const appSettingsSchema = z.object({
   theme: z.enum(["system", "light", "dark"]),
   providers: z.array(providerConfigurationSchema),
+  memoryExtractionEnabled: z.boolean().default(false),
+  memoryContextEnabled: z.boolean().default(false),
 });
 export type Character = z.infer<typeof characterSchema>;
 export type Persona = z.infer<typeof personaSchema>;
 export type Conversation = z.infer<typeof conversationSchema>;
 export type Message = z.infer<typeof messageSchema>;
 export type Memory = z.infer<typeof memorySchema>;
+export type MemorySubject = z.infer<typeof memorySubjectSchema>;
 export type ProviderConfiguration = z.infer<typeof providerConfigurationSchema>;
-export type AppSettings = z.infer<typeof appSettingsSchema>;
+export type AppSettings = z.input<typeof appSettingsSchema>;
 export type CharacterCard = z.infer<typeof characterCardSchema>;

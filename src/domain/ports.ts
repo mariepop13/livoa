@@ -15,7 +15,6 @@ export interface Repository<T> {
 }
 export type CharacterRepository = Repository<Character>;
 
-
 export interface CharacterCardRepository {
   getByCharacterId(characterId: string): Promise<CharacterCard | null>;
   save(card: CharacterCard): Promise<void>;
@@ -23,8 +22,7 @@ export interface CharacterCardRepository {
 }
 
 export type CharacterCardImportWriteResult =
-  | { readonly kind: "saved" }
-  | { readonly kind: "character_exists" };
+  { readonly kind: "saved" } | { readonly kind: "character_exists" };
 
 export interface CharacterCardImportRepository {
   saveImportedCharacter(
@@ -57,6 +55,14 @@ export type ChatMessage = {
   content: string;
 };
 export type ChatRequest = { model: string; messages: ChatMessage[] };
+export type MemoryExtractionRequest = Readonly<{
+  model: string;
+  messages: readonly ChatMessage[];
+}>;
+export interface MemoryExtractionProvider {
+  extractMemories(request: MemoryExtractionRequest): Promise<unknown>;
+}
+
 export type ChatChunk = { type: "text" | "done"; content?: string };
 export type ProviderError = {
   code:

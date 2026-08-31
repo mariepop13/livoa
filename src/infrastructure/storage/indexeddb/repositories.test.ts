@@ -104,6 +104,7 @@ const message: Message = {
 const memory: Memory = {
   id: "55555555-5555-4555-8555-555555555555",
   characterId: character.id,
+  subject: "user",
   content: "Prefers concise answers.",
   createdAt: new Date("2026-05-01T12:00:00.000Z"),
   updatedAt: new Date("2026-05-02T12:00:00.000Z"),
@@ -111,6 +112,8 @@ const memory: Memory = {
 
 const settings: AppSettings = {
   theme: "dark",
+  memoryExtractionEnabled: false,
+  memoryContextEnabled: false,
   providers: [
     {
       id: "provider-1",
@@ -273,7 +276,6 @@ describe("IndexedDB repository adapters", () => {
     await expect(repository.getById(character.id)).resolves.toEqual(character);
   });
 
-
   it("persists imported card payloads and avatar bytes across repository reloads", async () => {
     const table = new MemoryTable<StoredCharacterCard>();
     const repository = new IndexedDbCharacterCardRepository({
@@ -282,7 +284,7 @@ describe("IndexedDB repository adapters", () => {
     const card = {
       characterId: character.id,
       format: "v2" as const,
-      rawPayload: "{\"spec\":\"chara_card_v2\",\"extensions\":{\"vendor/data\":true}}",
+      rawPayload: '{"spec":"chara_card_v2","extensions":{"vendor/data":true}}',
       avatar: {
         mediaType: "image/png" as const,
         bytes: new Uint8Array([137, 80, 78, 71]),

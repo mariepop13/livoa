@@ -57,6 +57,7 @@ const validMessage = {
 const validMemory = {
   id: "55555555-5555-4555-8555-555555555555",
   characterId: validCharacter.id,
+  subject: "user" as const,
   content: "Prefers concise answers.",
   ...validDates,
 };
@@ -88,6 +89,8 @@ describe("domain models", () => {
       }),
     ).toEqual({
       theme: "dark",
+      memoryExtractionEnabled: false,
+      memoryContextEnabled: false,
       providers: [validProviderConfiguration],
     });
   });
@@ -135,9 +138,12 @@ describe("domain models", () => {
         content: "  Prefers concise answers.  ",
       }),
     ).toEqual(validMemory);
-    expect(() =>
-      memorySchema.parse({ ...validMemory, id: "invalid" }),
-    ).toThrow(ZodError);
+    expect(
+      memorySchema.parse({ ...validMemory, subject: undefined }).subject,
+    ).toBe("user");
+    expect(() => memorySchema.parse({ ...validMemory, id: "invalid" })).toThrow(
+      ZodError,
+    );
     expect(() =>
       memorySchema.parse({ ...validMemory, characterId: "invalid" }),
     ).toThrow(ZodError);

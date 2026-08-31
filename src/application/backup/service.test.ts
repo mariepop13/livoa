@@ -62,6 +62,7 @@ const backupData: BackupData = {
     {
       id: memoryId,
       characterId,
+      subject: "user",
       content: "Prefers concise answers.",
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -69,6 +70,8 @@ const backupData: BackupData = {
   ],
   settings: {
     theme: "dark",
+    memoryExtractionEnabled: false,
+    memoryContextEnabled: false,
     providers: [
       {
         id: "openrouter-local",

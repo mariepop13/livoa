@@ -21,9 +21,9 @@ interface TransactionTable<Record extends { id: string }> {
   put(record: Record): Promise<unknown>;
 }
 
-class MemoryTable<Record extends { id: string }>
-  implements TransactionTable<Record>
-{
+class MemoryTable<
+  Record extends { id: string },
+> implements TransactionTable<Record> {
   readonly #records = new Map<string, Record>();
 
   public async toArray(): Promise<Record[]> {
@@ -71,6 +71,7 @@ const timestamp = "2026-08-24T12:00:00.000Z";
 const memory = {
   id: "55555555-5555-4555-8555-555555555555",
   characterId: "11111111-1111-4111-8111-111111111111",
+  subject: "user",
   content: "Prefers concise answers.",
   createdAt: timestamp,
   updatedAt: timestamp,

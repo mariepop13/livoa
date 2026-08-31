@@ -9,24 +9,39 @@ import {
 } from "react";
 
 import type {
+  MemoryExtractionCandidate,
+  MemorySettings,
   MemoryUseCaseError,
   MemoryValidationIssue,
 } from "@/application/memories";
-import type { Character, Memory } from "@/domain/models";
+import type {
+  Character,
+  Conversation,
+  Memory,
+  MemorySubject,
+} from "@/domain/models";
 
 import {
   createBrowserMemoryServices,
   type BrowserMemoryServices,
 } from "./browser-memory-service";
 
-type MemoryDraft = { characterId: string; content: string };
+type MemoryDraft = {
+  characterId: string;
+  subject: MemorySubject;
+  content: string;
+};
 type MemoryField = keyof MemoryDraft;
 type MemoryFieldIssue = Readonly<{ field: MemoryField; message: string }>;
 type MemoryManagementScreenProps = Readonly<{
   services?: BrowserMemoryServices;
 }>;
 
-const emptyDraft: MemoryDraft = { characterId: "", content: "" };
+const emptyDraft: MemoryDraft = {
+  characterId: "",
+  subject: "user",
+  content: "",
+};
 const fieldClassName =
   "mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-3 text-sm text-slate-100 shadow-sm outline-none transition focus:border-cyan-300 focus:ring-4 focus:ring-cyan-300/15 aria-[invalid=true]:border-rose-400 aria-[invalid=true]:focus:ring-rose-400/15";
 const secondaryButtonClassName =
@@ -37,11 +52,15 @@ function getFieldIssueMessage(field: MemoryField): string {
     return "Choose an existing character for this memory.";
   }
 
+  if (field === "subject") {
+    return "Choose what this memory is about.";
+  }
+
   return "Enter a memory between 1 and 2,000 characters.";
 }
 
 function isMemoryField(value: unknown): value is MemoryField {
-  return value === "characterId" || value === "content";
+  return value === "characterId" || value === "subject" || value === "content";
 }
 
 function mapValidationIssues(
@@ -121,6 +140,14 @@ export default function MemoryManagementScreen({
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string>();
+  const [conversations, setConversations] = useState<readonly Conversation[]>();
+  const [memorySettings, setMemorySettings] = useState<MemorySettings>();
+  const [selectedConversationId, setSelectedConversationId] = useState("");
+  const [candidates, setCandidates] = useState<
+    readonly (MemoryExtractionCandidate & { selected: boolean })[]
+  >([]);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [isReviewing, setIsReviewing] = useState(false);
   const reloadVersionRef = useRef(0);
 
   const reload = useCallback(async (): Promise<void> => {
@@ -132,9 +159,16 @@ export default function MemoryManagementScreen({
     setIsLoading(true);
     setScreenError(undefined);
     try {
-      const [characterResult, memoryResult] = await Promise.all([
+      const [
+        characterResult,
+        memoryResult,
+        settingsResult,
+        conversationResult,
+      ] = await Promise.all([
         activeServices.characters.list(),
         activeServices.memories.list(),
+        activeServices.settings.load(),
+        activeServices.listConversations(),
       ]);
       if (reloadVersion !== reloadVersionRef.current) {
         return;
@@ -147,8 +181,14 @@ export default function MemoryManagementScreen({
         setScreenError(getErrorMessage(memoryResult.error));
         return;
       }
+      if (!settingsResult.ok) {
+        setScreenError(settingsResult.error.message);
+        return;
+      }
       setCharacters(characterResult.data);
       setMemories(memoryResult.data);
+      setMemorySettings(settingsResult.data);
+      setConversations(conversationResult);
     } catch {
       if (reloadVersion === reloadVersionRef.current) {
         setScreenError(getUnexpectedErrorMessage());
@@ -191,7 +231,11 @@ export default function MemoryManagementScreen({
   }
 
   function startEditing(memory: Memory): void {
-    setDraft({ characterId: memory.characterId, content: memory.content });
+    setDraft({
+      characterId: memory.characterId,
+      subject: memory.subject,
+      content: memory.content,
+    });
     setEditingId(memory.id);
     setFieldIssues([]);
     setScreenError(undefined);
@@ -297,8 +341,96 @@ export default function MemoryManagementScreen({
       setDeletingId(undefined);
     }
   }
+  async function updateMemorySettings(next: MemorySettings): Promise<void> {
+    if (activeServices === undefined) {
+      return;
+    }
+    setScreenError(undefined);
+    const result = await activeServices.settings.update(next);
+    if (!result.ok) {
+      setScreenError(result.error.message);
+      return;
+    }
+    setMemorySettings(result.data);
+    setStatusMessage("Memory privacy settings updated.");
+  }
 
-  if (characters === undefined || memories === undefined) {
+  async function handleExtract(): Promise<void> {
+    if (activeServices === undefined || selectedConversationId === "") {
+      return;
+    }
+    setIsExtracting(true);
+    setScreenError(undefined);
+    setStatusMessage(undefined);
+    setCandidates([]);
+    try {
+      const result = await activeServices.extract(selectedConversationId);
+      if (!result.ok) {
+        setScreenError(result.error.message);
+        return;
+      }
+      setCandidates(
+        result.data.map((candidate) => ({ ...candidate, selected: false })),
+      );
+      setStatusMessage(
+        result.data.length === 0
+          ? "No memory candidates were found."
+          : "Review extracted candidates before saving any of them.",
+      );
+    } catch {
+      setScreenError("Memory candidates could not be extracted. Try again.");
+    } finally {
+      setIsExtracting(false);
+    }
+  }
+
+  async function saveSelectedCandidates(): Promise<void> {
+    if (activeServices === undefined || draft.characterId === "") {
+      return;
+    }
+    const selected = candidates.filter((candidate) => candidate.selected);
+    if (selected.length === 0) {
+      setStatusMessage("No candidates were selected. Nothing was saved.");
+      return;
+    }
+    setIsReviewing(true);
+    setScreenError(undefined);
+    try {
+      const results = await Promise.all(
+        selected.map((candidate) =>
+          activeServices.memories.create({
+            characterId: draft.characterId,
+            subject: candidate.subject,
+            content: candidate.content,
+          }),
+        ),
+      );
+      const failed = results.find((result) => !result.ok);
+      if (failed !== undefined && !failed.ok) {
+        setScreenError(getErrorMessage(failed.error));
+        return;
+      }
+      const saved = results.flatMap((result) =>
+        result.ok ? [result.data] : [],
+      );
+      setMemories((current) => [...(current ?? []), ...saved]);
+      setCandidates([]);
+      setStatusMessage(
+        `${saved.length} selected memory candidate${saved.length === 1 ? "" : "s"} saved.`,
+      );
+    } catch {
+      setScreenError("Selected candidates could not be saved. Try again.");
+    } finally {
+      setIsReviewing(false);
+    }
+  }
+
+  if (
+    characters === undefined ||
+    memories === undefined ||
+    conversations === undefined ||
+    memorySettings === undefined
+  ) {
     return (
       <main
         className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100 sm:px-6 lg:px-10"
@@ -403,6 +535,153 @@ export default function MemoryManagementScreen({
             {statusMessage}
           </p>
         ) : null}
+
+        <section
+          className="mt-8 rounded-3xl border border-slate-800 bg-slate-900/85 p-5 sm:p-8"
+          aria-labelledby="memory-privacy-title"
+        >
+          <h2
+            id="memory-privacy-title"
+            className="text-2xl font-bold tracking-tight text-white"
+          >
+            Memory privacy
+          </h2>
+          <div className="mt-5 space-y-4">
+            <label className="flex gap-3 text-sm leading-6 text-slate-200">
+              <input
+                type="checkbox"
+                checked={memorySettings.memoryExtractionEnabled}
+                onChange={(event) =>
+                  void updateMemorySettings({
+                    ...memorySettings,
+                    memoryExtractionEnabled: event.target.checked,
+                  })
+                }
+                aria-label="Enable memory extraction"
+              />
+              <span>
+                Enable memory extraction. Requesting candidates sends a bounded
+                selection of one conversation to your configured provider.
+              </span>
+            </label>
+            <label className="flex gap-3 text-sm leading-6 text-slate-200">
+              <input
+                type="checkbox"
+                checked={memorySettings.memoryContextEnabled}
+                onChange={(event) =>
+                  void updateMemorySettings({
+                    ...memorySettings,
+                    memoryContextEnabled: event.target.checked,
+                  })
+                }
+                aria-label="Use saved memories in chat context"
+              />
+              <span>
+                Use bounded saved memories as untrusted reference data in future
+                chats.
+              </span>
+            </label>
+          </div>
+          <div className="mt-6 border-t border-slate-800 pt-6">
+            <h3 className="text-lg font-semibold text-white">
+              Extract candidates for review
+            </h3>
+            <label
+              className="mt-4 block text-sm font-semibold text-slate-100"
+              htmlFor="memory-extraction-conversation"
+            >
+              Conversation
+            </label>
+            <select
+              id="memory-extraction-conversation"
+              className={fieldClassName}
+              value={selectedConversationId}
+              onChange={(event) =>
+                setSelectedConversationId(event.target.value)
+              }
+              disabled={!memorySettings.memoryExtractionEnabled || isExtracting}
+            >
+              <option value="">Choose a conversation</option>
+              {conversations
+                .filter(
+                  (conversation) =>
+                    draft.characterId === "" ||
+                    conversation.characterId === draft.characterId,
+                )
+                .sort(
+                  (left, right) =>
+                    right.updatedAt.getTime() - left.updatedAt.getTime(),
+                )
+                .map((conversation) => (
+                  <option key={conversation.id} value={conversation.id}>
+                    {conversation.title ??
+                      `Conversation updated ${conversation.updatedAt.toLocaleString()}`}
+                  </option>
+                ))}
+            </select>
+            <button
+              type="button"
+              className={`mt-4 ${secondaryButtonClassName}`}
+              onClick={() => void handleExtract()}
+              disabled={
+                !memorySettings.memoryExtractionEnabled ||
+                selectedConversationId === "" ||
+                isExtracting
+              }
+            >
+              {isExtracting ? "Extracting candidates…" : "Extract candidates"}
+            </button>
+            {candidates.length > 0 ? (
+              <fieldset
+                className="mt-6 space-y-3"
+                aria-label="Memory candidates for review"
+              >
+                <legend className="font-semibold text-slate-100">
+                  Select user-memory candidates to save
+                </legend>
+                {candidates.map((candidate, index) => (
+                  <label
+                    key={`${candidate.content}-${index}`}
+                    className="flex gap-3 rounded-xl border border-slate-700 p-3 text-sm text-slate-200"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={candidate.selected}
+                      onChange={(event) =>
+                        setCandidates((current) =>
+                          current.map((item, itemIndex) =>
+                            itemIndex === index
+                              ? { ...item, selected: event.target.checked }
+                              : item,
+                          ),
+                        )
+                      }
+                      aria-label={`Select memory candidate ${index + 1}`}
+                    />
+                    <span>
+                      <span className="font-semibold">About the user: </span>
+                      {candidate.content}
+                    </span>
+                  </label>
+                ))}
+                <button
+                  type="button"
+                  className={secondaryButtonClassName}
+                  onClick={() => void saveSelectedCandidates()}
+                  disabled={
+                    isReviewing ||
+                    draft.characterId === "" ||
+                    !candidates.some((candidate) => candidate.selected)
+                  }
+                >
+                  {isReviewing
+                    ? "Saving selected candidates…"
+                    : "Save selected candidates"}
+                </button>
+              </fieldset>
+            ) : null}
+          </div>
+        </section>
 
         <div className="mt-8 grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
           <section
@@ -518,6 +797,42 @@ export default function MemoryManagementScreen({
               <div>
                 <label
                   className="block text-sm font-semibold text-slate-100"
+                  htmlFor="memory-subject"
+                >
+                  About
+                </label>
+                <p
+                  id="memory-subject-help"
+                  className="mt-2 text-sm leading-6 text-slate-400"
+                >
+                  Choose whose long-term context this note describes.
+                </p>
+                <select
+                  id="memory-subject"
+                  name="subject"
+                  className={fieldClassName}
+                  value={draft.subject}
+                  onChange={(event) =>
+                    updateDraft("subject", event.target.value as MemorySubject)
+                  }
+                  aria-describedby="memory-subject-help"
+                  aria-invalid={fieldIssue("subject") !== undefined}
+                  disabled={isSubmitting}
+                >
+                  <option value="user">The user</option>
+                  <option value="character">This character</option>
+                  <option value="scenario">
+                    This conversation or scenario
+                  </option>
+                </select>
+                <FieldError
+                  id="memory-subject-error"
+                  message={fieldIssue("subject")}
+                />
+              </div>
+              <div>
+                <label
+                  className="block text-sm font-semibold text-slate-100"
                   htmlFor="memory-content"
                 >
                   Memory
@@ -557,7 +872,8 @@ export default function MemoryManagementScreen({
               </div>
               <div className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-800 pt-6">
                 <p className="max-w-md text-sm leading-6 text-slate-400">
-                  Each note belongs to one saved character.
+                  Each note belongs to one saved character and has an explicit
+                  subject.
                 </p>
                 <button
                   type="submit"
@@ -630,6 +946,13 @@ export default function MemoryManagementScreen({
                   >
                     <p className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-300">
                       {characterName(characters, memory.characterId)}
+                    </p>
+                    <p className="mt-2 text-xs font-semibold text-slate-400">
+                      {memory.subject === "user"
+                        ? "About the user"
+                        : memory.subject === "character"
+                          ? "About this character"
+                          : "About this scenario"}
                     </p>
                     <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-200">
                       {memory.content}
