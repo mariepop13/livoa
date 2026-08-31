@@ -103,6 +103,7 @@ describe("memory application service", () => {
       data: {
         id: memoryId,
         characterId,
+        subject: "user",
         content: "Prefers concise answers.",
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -162,6 +163,7 @@ describe("memory application service", () => {
     const memory: Memory = {
       id: memoryId,
       characterId,
+      subject: "user",
       content: "Existing note.",
       createdAt: timestamp,
       updatedAt: timestamp,

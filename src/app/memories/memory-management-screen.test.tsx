@@ -8,13 +8,17 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createCharacterApplicationService } from "@/application/characters";
-import { createMemoryApplicationService } from "@/application/memories";
+import {
+  createMemoryApplicationService,
+  MemorySettingsService,
+} from "@/application/memories";
 import type { Character, Memory } from "@/domain/models";
 import type {
   CharacterMemoryDeletionRepository,
   MemoryCharacterWriteRepository,
   MemoryCharacterWriteResult,
   Repository,
+  SettingsRepository,
 } from "@/domain/ports";
 
 import type { BrowserMemoryServices } from "./browser-memory-service";
@@ -50,6 +54,7 @@ const emptyCharacter: Character = {
 const olderMemory: Memory = {
   id: memoryId,
   characterId,
+  subject: "user",
   content: "Older Astra memory.",
   createdAt: olderMemoryCreatedAt,
   updatedAt: timestamp,
@@ -57,6 +62,7 @@ const olderMemory: Memory = {
 const newerMemory: Memory = {
   id: "55555555-5555-4555-8555-555555555555",
   characterId,
+  subject: "user",
   content: "Newer Astra memory.",
   createdAt: newerMemoryCreatedAt,
   updatedAt: timestamp,
@@ -64,6 +70,7 @@ const newerMemory: Memory = {
 const secondCharacterMemory: Memory = {
   id: "66666666-6666-4666-8666-666666666666",
   characterId: secondCharacterId,
+  subject: "user",
   content: "Bram's memory.",
   createdAt: timestamp,
   updatedAt: timestamp,
@@ -117,6 +124,10 @@ function createServices(
       return { kind: "saved" };
     },
   };
+  const settingsRepository: SettingsRepository = {
+    get: async () => null,
+    save: async () => undefined,
+  };
 
   return {
     characters: createCharacterApplicationService(
@@ -131,6 +142,9 @@ function createServices(
         now: () => timestamp,
       },
     ),
+    settings: new MemorySettingsService(settingsRepository),
+    listConversations: async () => [],
+    extract: async () => ({ ok: true, data: [] }),
   };
 }
 

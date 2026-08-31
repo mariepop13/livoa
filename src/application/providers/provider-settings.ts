@@ -146,6 +146,8 @@ type CredentialState = Readonly<{
 const defaultSettings: AppSettings = {
   theme: "system",
   providers: [],
+  memoryExtractionEnabled: false,
+  memoryContextEnabled: false,
 };
 
 function success<T>(data: T): ProviderSettingsResult<T> {

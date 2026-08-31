@@ -18,7 +18,10 @@ type ChatSetupProps = Readonly<{
 }>;
 
 function formatConversationName(conversation: Conversation): string {
-  return conversation.title ?? "New conversation";
+  return (
+    conversation.title ??
+    `New conversation · ${conversation.updatedAt.toLocaleString()}`
+  );
 }
 
 export default function ChatSetup({

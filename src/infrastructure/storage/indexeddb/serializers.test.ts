@@ -66,6 +66,7 @@ const message: Message = {
 const memory: Memory = {
   id: "55555555-5555-4555-8555-555555555555",
   characterId: character.id,
+  subject: "user",
   content: "Prefers concise answers.",
   createdAt: new Date("2026-05-01T12:00:00.000Z"),
   updatedAt: new Date("2026-05-02T12:00:00.000Z"),
@@ -73,6 +74,8 @@ const memory: Memory = {
 
 const settings: AppSettings = {
   theme: "dark",
+  memoryExtractionEnabled: false,
+  memoryContextEnabled: false,
   providers: [
     {
       id: "provider-1",

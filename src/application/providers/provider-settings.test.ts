@@ -171,6 +171,8 @@ describe("ProviderSettingsService", () => {
     expect(result.ok).toBe(true);
     expect(settingsRepository.settings).toEqual({
       theme: "system",
+      memoryExtractionEnabled: false,
+      memoryContextEnabled: false,
       providers: [
         {
           id: providerInput.id,
