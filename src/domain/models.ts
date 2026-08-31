@@ -13,6 +13,32 @@ export const characterSchema = z.object({
   avatar: z.url().optional(),
   ...dateFields,
 });
+
+export const CHARACTER_CARD_MAX_PAYLOAD_BYTES = 256 * 1024;
+export const CHARACTER_CARD_MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+export const characterCardFormatSchema = z.enum(["v1", "v2"]);
+export const characterCardAvatarSchema = z.object({
+  mediaType: z.enum(["image/png", "image/apng"]),
+  bytes: z
+    .instanceof(Uint8Array)
+    .refine(
+      (value) => value.byteLength <= CHARACTER_CARD_MAX_AVATAR_BYTES,
+      { message: "Avatar exceeds the character-card file limit" },
+    ),
+});
+export const characterCardSchema = z.object({
+  characterId: z.string().uuid(),
+  format: characterCardFormatSchema,
+  rawPayload: z
+    .string()
+    .refine(
+      (value) =>
+        new TextEncoder().encode(value).byteLength <=
+        CHARACTER_CARD_MAX_PAYLOAD_BYTES,
+      { message: "Card payload exceeds the character-card payload limit" },
+    ),
+  avatar: characterCardAvatarSchema.optional(),
+});
 export const personaSchema = z.object({
   id: z.string().uuid(),
   name: z.string().trim().min(1).max(120),
@@ -59,3 +85,4 @@ export type Message = z.infer<typeof messageSchema>;
 export type Memory = z.infer<typeof memorySchema>;
 export type ProviderConfiguration = z.infer<typeof providerConfigurationSchema>;
 export type AppSettings = z.infer<typeof appSettingsSchema>;
+export type CharacterCard = z.infer<typeof characterCardSchema>;

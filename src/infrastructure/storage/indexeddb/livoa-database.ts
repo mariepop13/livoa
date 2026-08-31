@@ -3,6 +3,7 @@ import Dexie, { type EntityTable } from "dexie";
 import type {
   StoredAppSettings,
   StoredCharacter,
+  StoredCharacterCard,
   StoredConversation,
   StoredMemory,
   StoredMessage,
@@ -11,6 +12,7 @@ import type {
 
 export class LivoaDatabase extends Dexie {
   public characters!: EntityTable<StoredCharacter, "id">;
+  public characterCards!: EntityTable<StoredCharacterCard, "characterId">;
   public personas!: EntityTable<StoredPersona, "id">;
   public conversations!: EntityTable<StoredConversation, "id">;
   public messages!: EntityTable<StoredMessage, "id">;
@@ -31,5 +33,10 @@ export class LivoaDatabase extends Dexie {
     this.version(2).stores({
       memories: "id, characterId, updatedAt",
     });
+
+    this.version(3).stores({
+      characterCards: "characterId",
+    });
   }
+
 }

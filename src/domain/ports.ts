@@ -1,6 +1,7 @@
 import type {
   AppSettings,
   Character,
+  CharacterCard,
   Conversation,
   Memory,
   Message,
@@ -14,6 +15,23 @@ export interface Repository<T> {
 }
 export type CharacterRepository = Repository<Character>;
 
+
+export interface CharacterCardRepository {
+  getByCharacterId(characterId: string): Promise<CharacterCard | null>;
+  save(card: CharacterCard): Promise<void>;
+  deleteByCharacterId(characterId: string): Promise<void>;
+}
+
+export type CharacterCardImportWriteResult =
+  | { readonly kind: "saved" }
+  | { readonly kind: "character_exists" };
+
+export interface CharacterCardImportRepository {
+  saveImportedCharacter(
+    character: Character,
+    card: CharacterCard,
+  ): Promise<CharacterCardImportWriteResult>;
+}
 export interface CharacterMemoryDeletionRepository {
   deleteCharacterAndMemories(characterId: string): Promise<void>;
 }

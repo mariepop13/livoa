@@ -11,6 +11,7 @@ import type {
 } from "../../../domain/models";
 import {
   IndexedDbAppSettingsRepository,
+  IndexedDbCharacterCardRepository,
   IndexedDbCharacterMemoryDeletionRepository,
   IndexedDbCharacterRepository,
   IndexedDbConversationRepository,
@@ -24,6 +25,7 @@ import { IndexedDbRepository } from "./indexeddb-repository";
 import type {
   StoredAppSettings,
   StoredCharacter,
+  StoredCharacterCard,
   StoredConversation,
   StoredMemory,
   StoredMessage,
@@ -271,6 +273,33 @@ describe("IndexedDB repository adapters", () => {
     await expect(repository.getById(character.id)).resolves.toEqual(character);
   });
 
+
+  it("persists imported card payloads and avatar bytes across repository reloads", async () => {
+    const table = new MemoryTable<StoredCharacterCard>();
+    const repository = new IndexedDbCharacterCardRepository({
+      characterCards: table,
+    });
+    const card = {
+      characterId: character.id,
+      format: "v2" as const,
+      rawPayload: "{\"spec\":\"chara_card_v2\",\"extensions\":{\"vendor/data\":true}}",
+      avatar: {
+        mediaType: "image/png" as const,
+        bytes: new Uint8Array([137, 80, 78, 71]),
+      },
+    };
+
+    await repository.save(card);
+    card.avatar.bytes[0] = 0;
+
+    await expect(repository.getByCharacterId(character.id)).resolves.toEqual({
+      ...card,
+      avatar: {
+        mediaType: "image/png",
+        bytes: new Uint8Array([137, 80, 78, 71]),
+      },
+    });
+  });
   it("round-trips Persona, Conversation, and Message dates as persisted strings", async () => {
     const personaTable = new MemoryTable<StoredPersona>();
     const conversationTable = new MemoryTable<StoredConversation>();
