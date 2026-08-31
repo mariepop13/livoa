@@ -11,8 +11,14 @@ import { createCharacterApplicationService } from "@/application/characters";
 import {
   createMemoryApplicationService,
   MemorySettingsService,
+  type MemoryExtractionCandidate,
 } from "@/application/memories";
-import type { Character, Memory } from "@/domain/models";
+import type {
+  AppSettings,
+  Character,
+  Conversation,
+  Memory,
+} from "@/domain/models";
 import type {
   CharacterMemoryDeletionRepository,
   MemoryCharacterWriteRepository,
@@ -33,6 +39,13 @@ const character: Character = {
   description: "A patient guide.",
   personality: "Thoughtful.",
   systemPrompt: "Be helpful.",
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+
+const conversation: Conversation = {
+  id: "77777777-7777-4777-8777-777777777777",
+  characterId,
   createdAt: timestamp,
   updatedAt: timestamp,
 };
@@ -102,9 +115,16 @@ class InMemoryRepository<T extends { id: string }> implements Repository<T> {
   }
 }
 
+type ServiceOptions = Readonly<{
+  settings?: AppSettings | null;
+  conversations?: readonly Conversation[];
+  candidates?: readonly MemoryExtractionCandidate[];
+}>;
+
 function createServices(
   initialMemories: readonly Memory[] = [],
   initialCharacters: readonly Character[] = [character],
+  options: ServiceOptions = {},
 ): BrowserMemoryServices {
   const characters = new InMemoryRepository<Character>(initialCharacters);
   const memories = new InMemoryRepository<Memory>(initialMemories);
@@ -125,7 +145,7 @@ function createServices(
     },
   };
   const settingsRepository: SettingsRepository = {
-    get: async () => null,
+    get: async () => options.settings ?? null,
     save: async () => undefined,
   };
 
@@ -143,8 +163,8 @@ function createServices(
       },
     ),
     settings: new MemorySettingsService(settingsRepository),
-    listConversations: async () => [],
-    extract: async () => ({ ok: true, data: [] }),
+    listConversations: async () => options.conversations ?? [],
+    extract: async () => ({ ok: true, data: options.candidates ?? [] }),
   };
 }
 
@@ -269,5 +289,58 @@ describe("MemoryManagementScreen", () => {
       "aria-invalid",
       "true",
     );
+  });
+  it("does not persist extracted candidates until the user explicitly selects and saves one", async () => {
+    const extractedCandidate = "Prefers direct answers.";
+    render(
+      <MemoryManagementScreen
+        services={createServices([], [character], {
+          settings: {
+            theme: "system",
+            providers: [],
+            memoryExtractionEnabled: true,
+            memoryContextEnabled: false,
+          },
+          conversations: [conversation],
+          candidates: [{ subject: "user", content: extractedCandidate }],
+        })}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "Create a memory" });
+    fireEvent.change(screen.getByLabelText("Character"), {
+      target: { value: characterId },
+    });
+    fireEvent.change(screen.getByLabelText("Conversation"), {
+      target: { value: conversation.id },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Extract candidates" }));
+
+    expect(
+      await screen.findByText(
+        "Review extracted candidates before saving any of them.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByLabelText("Memory candidates for review"),
+    ).toHaveTextContent(extractedCandidate);
+    expect(
+      screen.getByText("No memories saved for Astra yet"),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("list", { name: "Saved memories list" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("Select memory candidate 1"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save selected candidates" }),
+    );
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "1 selected memory candidate saved.",
+    );
+    expect(
+      screen.getByRole("list", { name: "Saved memories list" }),
+    ).toHaveTextContent(extractedCandidate);
   });
 });

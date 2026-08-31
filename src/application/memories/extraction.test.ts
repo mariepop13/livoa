@@ -90,6 +90,41 @@ describe("memory extraction boundaries", () => {
     expect(selected[0]?.content).toBe(`003${"x".repeat(597)}`);
   });
 
+  it("sends no more than the extraction message and character budgets", async () => {
+    const enabled: AppSettings = {
+      theme: "system",
+      providers: [],
+      memoryExtractionEnabled: true,
+      memoryContextEnabled: false,
+    };
+    const { service, provider } = createService(
+      enabled,
+      { candidates: ["Prefers short answers."] },
+      Array.from({ length: 13 }, (_, index) =>
+        message(index, `${String(index).padStart(3, "0")}${"x".repeat(597)}`),
+      ),
+    );
+
+    await expect(
+      service.extract({ conversationId: conversation.id, model: "model" }),
+    ).resolves.toMatchObject({ ok: true });
+
+    const extractMemories = vi.mocked(provider.extractMemories);
+    const request = extractMemories.mock.calls[0]?.[0];
+    if (request === undefined) {
+      throw new Error("Expected extraction to invoke the provider.");
+    }
+    expect(request.messages).toHaveLength(
+      Math.floor(MEMORY_EXTRACTION_LIMITS.maxCharacters / 600),
+    );
+    expect(
+      request.messages.reduce(
+        (total, selected) => total + selected.content.length,
+        0,
+      ),
+    ).toBeLessThanOrEqual(MEMORY_EXTRACTION_LIMITS.maxCharacters);
+  });
+
   it("requires extraction consent before it invokes a provider", async () => {
     const { service, provider } = createService(null, {
       candidates: ["ignored"],
@@ -102,6 +137,38 @@ describe("memory extraction boundaries", () => {
       error: { kind: "consent_required" },
     });
     expect(provider.extractMemories).not.toHaveBeenCalled();
+  });
+
+  it("defaults missing persisted consent to disabled and retains explicit choices after reload", async () => {
+    let persisted: AppSettings = { theme: "system", providers: [] };
+    const repository: SettingsRepository = {
+      get: async () => persisted,
+      save: async (settings) => {
+        persisted = settings;
+      },
+    };
+    const settings = new MemorySettingsService(repository);
+
+    await expect(settings.load()).resolves.toEqual({
+      ok: true,
+      data: {
+        memoryExtractionEnabled: false,
+        memoryContextEnabled: false,
+      },
+    });
+    await expect(
+      settings.update({
+        memoryExtractionEnabled: true,
+        memoryContextEnabled: true,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(new MemorySettingsService(repository).load()).resolves.toEqual({
+      ok: true,
+      data: {
+        memoryExtractionEnabled: true,
+        memoryContextEnabled: true,
+      },
+    });
   });
 
   it("trims accepted candidates and exposes malformed output and provider failures", async () => {
@@ -132,12 +199,21 @@ describe("memory extraction boundaries", () => {
       }),
     ).resolves.toMatchObject({ ok: false, error: { kind: "provider" } });
 
-    const failed = createService(enabled, new Error("offline"));
+    const rawProviderFailure = "offline with provider-secret-value";
+    const failed = createService(enabled, new Error(rawProviderFailure));
     await expect(
       failed.service.extract({
         conversationId: conversation.id,
         model: "model",
       }),
     ).resolves.toMatchObject({ ok: false, error: { kind: "application" } });
+    await expect(
+      failed.service.extract({
+        conversationId: conversation.id,
+        model: "model",
+      }),
+    ).resolves.not.toMatchObject({
+      error: { message: expect.stringContaining(rawProviderFailure) },
+    });
   });
 });
