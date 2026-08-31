@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   appSettingsSchema,
+  characterCardSchema,
   characterSchema,
   conversationSchema,
   memorySchema,
@@ -38,6 +39,10 @@ export const storedCharacterSchema = characterSchema.extend({
   updatedAt: isoDateStringSchema,
 });
 
+
+export const storedCharacterCardSchema = characterCardSchema.extend({
+  id: z.string().uuid(),
+});
 export const storedPersonaSchema = personaSchema.extend({
   createdAt: isoDateStringSchema,
   updatedAt: isoDateStringSchema,
@@ -69,5 +74,6 @@ export type StoredCharacter = z.infer<typeof storedCharacterSchema>;
 export type StoredPersona = z.infer<typeof storedPersonaSchema>;
 export type StoredConversation = z.infer<typeof storedConversationSchema>;
 export type StoredMessage = z.infer<typeof storedMessageSchema>;
+export type StoredCharacterCard = z.infer<typeof storedCharacterCardSchema>;
 export type StoredMemory = z.infer<typeof storedMemorySchema>;
 export type StoredAppSettings = z.infer<typeof storedAppSettingsSchema>;

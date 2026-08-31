@@ -1,15 +1,24 @@
 "use client";
 
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { z } from "zod";
 
 import {
+  CHARACTER_CARD_MAX_FILE_BYTES,
   type CharacterApplicationService,
+  type CharacterCardApplicationService,
+  type CharacterCardPreview,
   type CharacterUseCaseError,
 } from "@/application/characters";
 import type { CharacterValidationIssue } from "@/application/characters/contracts";
 import type { Character } from "@/domain/models";
-
 import { createBrowserCharacterService } from "./browser-character-service";
 
 type CharacterDraft = {
@@ -22,7 +31,7 @@ type CharacterDraft = {
 };
 
 type CharacterManagementScreenProps = Readonly<{
-  service?: CharacterApplicationService;
+  service?: CharacterApplicationService & CharacterCardApplicationService;
 }>;
 
 type CharacterField = keyof CharacterDraft;
@@ -83,6 +92,9 @@ const fieldClassName =
 const secondaryButtonClassName =
   "rounded-lg border border-slate-700 bg-slate-900 px-3.5 py-2.5 text-sm font-semibold text-slate-100 shadow-sm transition hover:border-slate-500 hover:bg-slate-800 focus:outline-none focus:ring-4 focus:ring-cyan-300/20 disabled:cursor-not-allowed disabled:opacity-60";
 
+const dangerButtonClassName =
+  "rounded-lg border border-rose-500/60 bg-rose-950/40 px-3.5 py-2.5 text-sm font-semibold text-rose-100 shadow-sm transition hover:border-rose-400 hover:bg-rose-900/50 focus:outline-none focus:ring-4 focus:ring-rose-400/20 disabled:cursor-not-allowed disabled:opacity-60";
+
 function draftFromCharacter(character: Character): CharacterDraft {
   return {
     name: character.name,
@@ -102,8 +114,12 @@ function getSafeAvatarReference(value: unknown): string | undefined {
     : undefined;
 }
 
-function CharacterAvatar({ character }: Readonly<{ character: Character }>) {
-  const avatarReference = getSafeAvatarReference(character.avatar);
+function CharacterAvatar({
+  character,
+  localAvatarReference,
+}: Readonly<{ character: Character; localAvatarReference?: string }>) {
+  const avatarReference =
+    getSafeAvatarReference(character.avatar) ?? localAvatarReference;
 
   if (avatarReference === undefined) {
     return (
@@ -232,24 +248,42 @@ function CharacterFieldControl({
 export default function CharacterManagementScreen({
   service,
 }: CharacterManagementScreenProps) {
-  const [activeService] = useState<CharacterApplicationService | undefined>(
-    () => {
-      if (service !== undefined || typeof window === "undefined") {
-        return service;
-      }
+  const [activeService] = useState<
+    (CharacterApplicationService & CharacterCardApplicationService) | undefined
+  >(() => {
+    if (service !== undefined || typeof window === "undefined") {
+      return service;
+    }
 
-      return createBrowserCharacterService();
-    },
-  );
+    return createBrowserCharacterService();
+  });
   const [characters, setCharacters] = useState<readonly Character[]>();
   const [draft, setDraft] = useState<CharacterDraft>(emptyDraft);
   const [editingId, setEditingId] = useState<string>();
+  const [viewingId, setViewingId] = useState<string>();
   const [validationIssues, setValidationIssues] = useState<
     readonly CharacterFieldIssue[]
   >([]);
+  const [localAvatarReferences, setLocalAvatarReferences] = useState<
+    Readonly<Record<string, string>>
+  >({});
+  const [pendingImport, setPendingImport] = useState<
+    Readonly<{
+      fileName: string;
+      bytes: Uint8Array;
+      preview: CharacterCardPreview;
+    }>
+  >();
+  const [isImporting, setIsImporting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string>();
+  const [selectedImportFileName, setSelectedImportFileName] = useState<
+    string
+  >();
+  const importFileInputRef = useRef<HTMLInputElement>(null);
+  const importSelectionVersion = useRef(0);
   const [screenError, setScreenError] = useState<string>();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string>();
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -289,6 +323,41 @@ export default function CharacterManagementScreen({
       isCurrent = false;
     };
   }, [activeService]);
+
+  useEffect(() => {
+    if (activeService === undefined || characters === undefined) return;
+    let isCurrent = true;
+    const references: Record<string, string> = {};
+    void Promise.all(
+      characters.map(async (character) => {
+        const result = await activeService.getAvatar(character.id);
+        if (!result.ok || result.data === undefined) return;
+        references[character.id] = URL.createObjectURL(
+          new Blob([new Uint8Array(result.data.bytes).buffer], {
+            type: result.data.mediaType,
+          }),
+        );
+      }),
+    )
+      .then(() => {
+        if (isCurrent) {
+          setLocalAvatarReferences(references);
+        } else {
+          Object.values(references).forEach((reference) =>
+            URL.revokeObjectURL(reference),
+          );
+        }
+      })
+      .catch(() => {
+        if (isCurrent) setScreenError(getUnexpectedErrorMessage());
+      });
+    return () => {
+      isCurrent = false;
+      Object.values(references).forEach((reference) =>
+        URL.revokeObjectURL(reference),
+      );
+    };
+  }, [activeService, characters]);
 
   function updateDraft<Key extends CharacterField>(
     key: Key,
@@ -337,6 +406,120 @@ export default function CharacterManagementScreen({
       setScreenError(getUnexpectedErrorMessage());
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function handleImportSelection(
+    event: ChangeEvent<HTMLInputElement>,
+  ): Promise<void> {
+    const file = event.target.files?.[0];
+    if (activeService === undefined || file === undefined) return;
+    const selectionVersion = importSelectionVersion.current + 1;
+    importSelectionVersion.current = selectionVersion;
+    setPendingImport(undefined);
+    setSelectedImportFileName(file.name);
+    event.currentTarget.value = "";
+    setStatusMessage(undefined);
+    setScreenError(undefined);
+    if (file.size > CHARACTER_CARD_MAX_FILE_BYTES) {
+      setScreenError("This file is not a supported SillyTavern character card.");
+      return;
+    }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (importSelectionVersion.current !== selectionVersion) return;
+      const result = activeService.previewImport({ fileName: file.name, bytes });
+      if (!result.ok) {
+        setScreenError(result.error.message);
+        return;
+      }
+      setPendingImport({ fileName: file.name, bytes, preview: result.data });
+    } catch {
+      if (importSelectionVersion.current === selectionVersion) {
+        setScreenError("The selected file could not be read. Choose another local file.");
+      }
+    }
+  }
+
+  async function confirmImport(): Promise<void> {
+    if (activeService === undefined || pendingImport === undefined) return;
+    setIsImporting(true);
+    setScreenError(undefined);
+    try {
+      const result = await activeService.import(pendingImport);
+      if (!result.ok) {
+        setScreenError(result.error.message);
+        return;
+      }
+      setCharacters((current) => [...(current ?? []), result.data]);
+      setPendingImport(undefined);
+      setSelectedImportFileName(undefined);
+      if (importFileInputRef.current !== null) {
+        importFileInputRef.current.value = "";
+      }
+      setStatusMessage("Character card imported.");
+    } catch {
+      setScreenError(getUnexpectedErrorMessage());
+    } finally {
+      setIsImporting(false);
+    }
+  }
+
+  async function exportCard(character: Character): Promise<void> {
+    if (activeService === undefined) return;
+    setScreenError(undefined);
+    try {
+      const result = await activeService.export(character.id);
+      if (!result.ok) {
+        setScreenError(result.error.message);
+        return;
+      }
+      const url = URL.createObjectURL(
+        new Blob([new Uint8Array(result.data.bytes).buffer], {
+          type: result.data.mediaType,
+        }),
+      );
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = result.data.fileName;
+      link.click();
+      URL.revokeObjectURL(url);
+      setStatusMessage("Character card exported.");
+    } catch {
+      setScreenError(getUnexpectedErrorMessage());
+    }
+  }
+
+  async function deleteCharacter(character: Character): Promise<void> {
+    if (
+      activeService === undefined ||
+      !window.confirm(
+        `Delete ${character.name}? This permanently removes the character and its local data.`,
+      )
+    ) {
+      return;
+    }
+    setDeletingId(character.id);
+    setScreenError(undefined);
+    setStatusMessage(undefined);
+    try {
+      const result = await activeService.delete(character.id);
+      if (!result.ok) {
+        setScreenError(getErrorMessage(result.error));
+        return;
+      }
+      setCharacters((current) =>
+        (current ?? []).filter(
+          (currentCharacter) => currentCharacter.id !== character.id,
+        ),
+      );
+      if (editingId === character.id) startCreating();
+      if (viewingId === character.id) setViewingId(undefined);
+      setStatusMessage("Character deleted.");
+    } catch {
+      setScreenError(getUnexpectedErrorMessage());
+    } finally {
+      setDeletingId(undefined);
     }
   }
 
@@ -525,6 +708,98 @@ export default function CharacterManagementScreen({
             {statusMessage}
           </p>
         ) : null}
+
+        <section
+          className="mt-8 rounded-3xl border border-slate-800 bg-slate-900/85 p-5 shadow-xl shadow-slate-950/25 sm:p-6"
+          aria-labelledby="character-card-import-title"
+        >
+          <h2
+            id="character-card-import-title"
+            className="text-xl font-bold text-white"
+          >
+            Import a SillyTavern character card
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-slate-400">
+            Choose one local JSON, PNG, or APNG card. The card is previewed
+            before it is added to your collection.
+          </p>
+          <p
+            id="character-card-file-label"
+            className="mt-4 text-sm font-semibold text-slate-100"
+          >
+            Character card file
+          </p>
+          <input
+            ref={importFileInputRef}
+            id="character-card-file"
+            className="hidden"
+            type="file"
+            accept=".json,.png,.apng,application/json,image/png"
+            aria-label="Character card file"
+            aria-hidden="true"
+            tabIndex={-1}
+            onChange={(event) => void handleImportSelection(event)}
+          />
+          <button
+            type="button"
+            className={`mt-3 ${secondaryButtonClassName}`}
+            onClick={() => importFileInputRef.current?.click()}
+          >
+            Choose character card file
+          </button>
+          <p
+            id="character-card-file-state"
+            className="mt-3 text-sm text-slate-400"
+            aria-live="polite"
+          >
+            {selectedImportFileName === undefined
+              ? "No file selected."
+              : `Selected: ${selectedImportFileName}. Review the preview before importing.`}
+          </p>
+          {pendingImport !== undefined ? (
+            <div
+              className="mt-5 rounded-xl border border-cyan-300/35 bg-slate-950/60 p-4"
+              aria-labelledby="character-card-preview-title"
+            >
+              <h3
+                id="character-card-preview-title"
+                className="font-semibold text-cyan-100"
+              >
+                Import preview: {pendingImport.preview.name}
+              </h3>
+              <dl className="mt-3 space-y-3 text-sm">
+                <div>
+                  <dt className="font-semibold text-slate-200">System prompt</dt>
+                  <dd className="mt-1 whitespace-pre-wrap text-slate-400">
+                    {pendingImport.preview.systemPrompt || "(empty)"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="font-semibold text-slate-200">
+                    Inert card fields
+                  </dt>
+                  <dd className="mt-1 text-slate-400">
+                    {pendingImport.preview.inertFields.length === 0
+                      ? "None"
+                      : pendingImport.preview.inertFields.join(", ")}
+                  </dd>
+                </div>
+              </dl>
+              <p className="mt-3 text-sm leading-6 text-slate-400">
+                These fields are preserved for export but are not sent to a
+                provider or used by Livoa chat behavior.
+              </p>
+              <button
+                type="button"
+                className={`mt-4 ${secondaryButtonClassName}`}
+                onClick={() => void confirmImport()}
+                disabled={isImporting}
+              >
+                {isImporting ? "Importing…" : "Confirm import"}
+              </button>
+            </div>
+          ) : null}
+        </section>
 
         <div className="mt-8 grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
           <section
@@ -810,7 +1085,12 @@ export default function CharacterManagementScreen({
                   >
                     <div className="flex h-full flex-col justify-between gap-4">
                       <div className="flex items-start gap-4">
-                        <CharacterAvatar character={character} />
+                        <CharacterAvatar
+                          character={character}
+                          localAvatarReference={
+                            localAvatarReferences[character.id]
+                          }
+                        />
                         <div className="min-w-0">
                           <h3 className="text-lg font-bold text-white">
                             {character.name}
@@ -820,13 +1100,101 @@ export default function CharacterManagementScreen({
                           </p>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        className={`${secondaryButtonClassName} self-start`}
-                        onClick={() => startEditing(character)}
-                      >
-                        Edit {character.name}
-                      </button>
+                      <div className="flex flex-wrap gap-3">
+                        <button
+                          type="button"
+                          className={`${secondaryButtonClassName} self-start`}
+                          onClick={() =>
+                            setViewingId((current) =>
+                              current === character.id ? undefined : character.id,
+                            )
+                          }
+                          aria-expanded={viewingId === character.id}
+                        >
+                          {viewingId === character.id
+                            ? `Hide ${character.name} details`
+                            : `View ${character.name} details`}
+                        </button>
+                        <button
+                          type="button"
+                          className={`${secondaryButtonClassName} self-start`}
+                          onClick={() => startEditing(character)}
+                        >
+                          Edit {character.name}
+                        </button>
+                        <button
+                          type="button"
+                          className={`${secondaryButtonClassName} self-start`}
+                          onClick={() => void exportCard(character)}
+                        >
+                          Export {character.name} card
+                        </button>
+                        <button
+                          type="button"
+                          className={`${dangerButtonClassName} self-start`}
+                          onClick={() => void deleteCharacter(character)}
+                          disabled={deletingId !== undefined}
+                        >
+                          {deletingId === character.id
+                            ? "Deleting…"
+                            : `Delete ${character.name}`}
+                        </button>
+                      </div>
+                      {viewingId === character.id ? (
+                        <section
+                          className="space-y-5 rounded-xl border border-slate-700 bg-slate-900 p-4"
+                          aria-labelledby={`${character.id}-details-title`}
+                        >
+                          <div className="flex items-center justify-between gap-4">
+                            <h4
+                              id={`${character.id}-details-title`}
+                              className="font-semibold text-white"
+                            >
+                              {character.name} details
+                            </h4>
+                            <button
+                              type="button"
+                              className={secondaryButtonClassName}
+                              onClick={() => setViewingId(undefined)}
+                            >
+                              Close details
+                            </button>
+                          </div>
+                          <dl className="space-y-4 text-sm">
+                            <div>
+                              <dt className="font-semibold text-slate-200">
+                                Personality
+                              </dt>
+                              <dd className="mt-1 whitespace-pre-wrap text-slate-400">
+                                {character.personality || "(empty)"}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="font-semibold text-slate-200">
+                                System prompt
+                              </dt>
+                              <dd className="mt-1 whitespace-pre-wrap text-slate-400">
+                                {character.systemPrompt || "(empty)"}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="font-semibold text-slate-200">
+                                Greeting
+                              </dt>
+                              <dd className="mt-1 whitespace-pre-wrap text-slate-400">
+                                {character.greeting ?? "(empty)"}
+                              </dd>
+                            </div>
+                          </dl>
+                          <button
+                            type="button"
+                            className={secondaryButtonClassName}
+                            onClick={() => startEditing(character)}
+                          >
+                            Edit {character.name}
+                          </button>
+                        </section>
+                      ) : null}
                     </div>
                   </li>
                 ))}
