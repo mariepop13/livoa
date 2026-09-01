@@ -29,6 +29,7 @@ export interface ChatAdapter {
   load(): Promise<ChatSnapshot>;
   createConversation(characterId: string): Promise<Conversation>;
   retrieveConversation(id: string): Promise<ConversationWithMessages>;
+  deleteConversation(id: string): Promise<void>;
   streamMessage(input: ChatStreamInput): Promise<ChatStreamOutcome>;
 }
 

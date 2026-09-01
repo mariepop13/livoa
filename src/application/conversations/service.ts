@@ -7,6 +7,7 @@ import {
   type Message,
 } from "../../domain/models";
 import type {
+  ConversationMessageDeletionRepository,
   ConversationRepository,
   MessageRepository,
 } from "../../domain/ports";
@@ -47,10 +48,9 @@ function notFoundFailure(id: string): ConversationUseCaseResult<never> {
     error: { kind: "not_found", code: "NOT_FOUND", id },
   };
 }
-
 function applicationFailure(
   error: unknown,
-  operation: "read" | "write",
+  operation: "read" | "write" | "delete",
 ): ConversationUseCaseResult<never> {
   const normalized = normalizeApplicationError(error, {
     kind: "storage",
@@ -257,9 +257,46 @@ export async function retrieveConversation(
   });
 }
 
+export async function deleteConversation(
+  conversationRepository: ConversationRepository,
+  conversationMessageDeletion: ConversationMessageDeletionRepository,
+  id: unknown,
+): Promise<ConversationUseCaseResult<void>> {
+  const parsedId = conversationIdSchema.safeParse(id);
+  if (!parsedId.success) {
+    return validationFailure(parsedId.error);
+  }
+
+  let conversation: Conversation | null;
+  try {
+    conversation = await conversationRepository.getById(parsedId.data);
+  } catch (error: unknown) {
+    return applicationFailure(error, "read");
+  }
+
+  if (conversation === null) {
+    return notFoundFailure(parsedId.data);
+  }
+
+  const parsedConversation = parseConversation(conversation);
+  if (!parsedConversation.ok) {
+    return parsedConversation;
+  }
+
+  try {
+    await conversationMessageDeletion.deleteConversationAndMessages(
+      parsedId.data,
+    );
+    return success(undefined);
+  } catch (error: unknown) {
+    return applicationFailure(error, "delete");
+  }
+}
+
 export function createConversationApplicationService(
   conversationRepository: ConversationRepository,
   messageRepository: MessageRepository,
+  conversationMessageDeletion: ConversationMessageDeletionRepository,
   dependencies: ConversationUseCaseDependencies = {},
 ): ConversationApplicationService {
   return {
@@ -276,8 +313,11 @@ export function createConversationApplicationService(
       ),
     retrieve: (id) =>
       retrieveConversation(conversationRepository, messageRepository, id),
+    delete: (id) =>
+      deleteConversation(conversationRepository, conversationMessageDeletion, id),
   };
 }
+
 
 export const getConversation = retrieveConversation;
 

@@ -70,6 +70,57 @@ test("cancels an in-flight deterministic response", async ({ page }) => {
   await expect(page.getByTestId("assistant-streaming")).toHaveCount(0);
 });
 
+test("permanently deletes the active local conversation and survives reload", async ({
+  page,
+}) => {
+  await openChat(page, "stream");
+
+  await page.getByLabel("Message", { exact: true }).fill("Keep this message.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByRole("status")).toHaveText("Response complete.");
+
+  await page
+    .getByRole("button", { name: "Start conversation with Mira Vale" })
+    .click();
+  await expect(page.getByRole("status")).toHaveText("Conversation created.");
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Delete this message.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByRole("status")).toHaveText("Response complete.");
+
+  await page
+    .getByRole("button", { name: "Delete selected conversation" })
+    .click();
+  const confirmation = page.getByRole("dialog", {
+    name: "Permanently delete conversation?",
+  });
+  await expect(confirmation).toContainText("This action is irreversible");
+  await page.getByRole("button", { name: "Permanently delete" }).click();
+
+  await expect(page.getByRole("status")).toHaveText("Conversation deleted.");
+  await expect(page.getByLabel("Conversation").locator("option")).toHaveCount(
+    2,
+  );
+  await expect(page.getByText("Delete this message.")).toHaveCount(0);
+
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Chat with your character." }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Conversation").locator("option")).toHaveCount(
+    2,
+  );
+  await expect(page.getByText("Keep this message.")).toBeVisible();
+  await expect(page.getByText("Delete this message.")).toHaveCount(0);
+
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Chat still works after deletion.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByRole("status")).toHaveText("Response complete.");
+});
+
 test("shows a normalized safe error for a provider failure", async ({
   page,
 }) => {

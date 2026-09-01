@@ -14,6 +14,7 @@ import {
   IndexedDbCharacterCardRepository,
   IndexedDbCharacterMemoryDeletionRepository,
   IndexedDbCharacterRepository,
+  IndexedDbConversationMessageDeletionRepository,
   IndexedDbConversationRepository,
   IndexedDbMemoryCharacterWriteRepository,
   IndexedDbMemoryRepository,
@@ -205,6 +206,88 @@ describe("IndexedDB repository adapters", () => {
     ).rejects.toThrow("character write failed");
     expect(characterIds).toContain(character.id);
     expect(memoryCharacterIds).toContain(character.id);
+  });
+
+  it("deletes a conversation and its messages in one transaction", async () => {
+    const conversationIds = new Set([conversation.id]);
+    const messageConversationIds = new Set([message.conversationId]);
+    let transactions = 0;
+    const transaction = {
+      execute: async (work: () => Promise<void>) => {
+        transactions += 1;
+        await work();
+      },
+    };
+    const repository = new IndexedDbConversationMessageDeletionRepository(
+      transaction,
+      {
+        delete: async (id: string) => {
+          conversationIds.delete(id);
+        },
+      },
+      {
+        where: () => ({
+          equals: (id: string) => ({
+            delete: async () => {
+              messageConversationIds.delete(id);
+            },
+          }),
+        }),
+      },
+    );
+
+    await repository.deleteConversationAndMessages(conversation.id);
+
+    expect(transactions).toBe(1);
+    expect(conversationIds).not.toContain(conversation.id);
+    expect(messageConversationIds).not.toContain(conversation.id);
+  });
+
+  it("rolls back conversation and messages when atomic deletion fails", async () => {
+    const conversationIds = new Set([conversation.id]);
+    const messageConversationIds = new Set([message.conversationId]);
+    const transaction = {
+      execute: async (work: () => Promise<void>) => {
+        const conversationSnapshot = new Set(conversationIds);
+        const messageSnapshot = new Set(messageConversationIds);
+        try {
+          await work();
+        } catch (error: unknown) {
+          conversationIds.clear();
+          messageConversationIds.clear();
+          for (const id of conversationSnapshot) {
+            conversationIds.add(id);
+          }
+          for (const id of messageSnapshot) {
+            messageConversationIds.add(id);
+          }
+          throw error;
+        }
+      },
+    };
+    const repository = new IndexedDbConversationMessageDeletionRepository(
+      transaction,
+      {
+        delete: async () => {
+          throw new Error("conversation write failed");
+        },
+      },
+      {
+        where: () => ({
+          equals: (id: string) => ({
+            delete: async () => {
+              messageConversationIds.delete(id);
+            },
+          }),
+        }),
+      },
+    );
+
+    await expect(
+      repository.deleteConversationAndMessages(conversation.id),
+    ).rejects.toThrow("conversation write failed");
+    expect(conversationIds).toContain(conversation.id);
+    expect(messageConversationIds).toContain(conversation.id);
   });
 
   it("checks a character and writes its memory in one transaction", async () => {

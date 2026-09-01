@@ -20,6 +20,7 @@ import type {
   CharacterCardRepository,
   CharacterMemoryDeletionRepository,
   CharacterRepository,
+  ConversationMessageDeletionRepository,
   ConversationRepository,
   MemoryCharacterWriteRepository,
   MemoryCharacterWriteResult,
@@ -96,6 +97,10 @@ interface CharacterTable {
   delete(id: string): Promise<void>;
 }
 
+interface ConversationTable {
+  delete(id: string): Promise<void>;
+}
+
 interface CharacterMemoryTable {
   where(index: "characterId"): {
     equals(characterId: string): { delete(): Promise<unknown> };
@@ -134,6 +139,16 @@ interface CharacterCardImportTransaction {
   execute<T>(work: () => Promise<T>): Promise<T>;
 }
 
+interface ConversationMessageDeletionTable {
+  where(index: "conversationId"): {
+    equals(conversationId: string): { delete(): Promise<unknown> };
+  };
+}
+
+interface ConversationMessageDeletionTransaction {
+  execute(work: () => Promise<void>): Promise<void>;
+}
+
 export class IndexedDbCharacterMemoryDeletionRepository implements CharacterMemoryDeletionRepository {
   public constructor(
     private readonly transaction: CharacterMemoryDeletionTransaction,
@@ -149,6 +164,26 @@ export class IndexedDbCharacterMemoryDeletionRepository implements CharacterMemo
         await this.cards.delete(characterId);
       }
       await this.characters.delete(characterId);
+    });
+  }
+}
+
+export class IndexedDbConversationMessageDeletionRepository
+  implements ConversationMessageDeletionRepository
+{
+  public constructor(
+    private readonly transaction: ConversationMessageDeletionTransaction,
+    private readonly conversations: ConversationTable,
+    private readonly messages: ConversationMessageDeletionTable,
+  ) {}
+
+  public async deleteConversationAndMessages(conversationId: string): Promise<void> {
+    await this.transaction.execute(async () => {
+      await this.messages
+        .where("conversationId")
+        .equals(conversationId)
+        .delete();
+      await this.conversations.delete(conversationId);
     });
   }
 }
@@ -356,6 +391,7 @@ export interface IndexedDbRepositories {
   characterMemoryDeletion: CharacterMemoryDeletionRepository;
   memoryCharacterWrite: MemoryCharacterWriteRepository;
   personas: PersonaRepository;
+  conversationMessageDeletion: ConversationMessageDeletionRepository;
   conversations: ConversationRepository;
   messages: MessageRepository;
   memories: MemoryRepository;
@@ -388,6 +424,15 @@ export function createIndexedDbRepositories(
       ),
   };
 
+  const conversationMessageDeletionTransaction: ConversationMessageDeletionTransaction =
+    {
+      execute: (work) =>
+        database.transaction(
+          "rw",
+          [database.conversations, database.messages],
+          work,
+        ),
+    };
   return {
     characters: new IndexedDbCharacterRepository(database),
     characterCards: new IndexedDbCharacterCardRepository(database),
@@ -412,5 +457,10 @@ export function createIndexedDbRepositories(
     messages: new IndexedDbMessageRepository(database),
     memories: new IndexedDbMemoryRepository(database),
     settings: new IndexedDbAppSettingsRepository(database),
+    conversationMessageDeletion: new IndexedDbConversationMessageDeletionRepository(
+      conversationMessageDeletionTransaction,
+      database.conversations,
+      database.messages,
+    ),
   };
 }

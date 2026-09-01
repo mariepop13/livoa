@@ -8,7 +8,11 @@ import type {
   Message,
   Persona,
 } from "@/domain/models";
-import type { Repository, SettingsRepository } from "@/domain/ports";
+import type {
+  ConversationMessageDeletionRepository,
+  Repository,
+  SettingsRepository,
+} from "@/domain/ports";
 import { credentialStorageKey } from "@/infrastructure/credentials/web-storage-credential-store";
 import type { IndexedDbRepositories } from "@/infrastructure/storage/indexeddb/repositories";
 
@@ -16,6 +20,7 @@ import { BrowserChatService } from "./browser-chat-service";
 
 class MemoryRepository<T extends { id: string }> implements Repository<T> {
   readonly #entities: Map<string, T>;
+  public deleteFailure: unknown = null;
 
   public constructor(entities: readonly T[] = []) {
     this.#entities = new Map(entities.map((entity) => [entity.id, entity]));
@@ -34,7 +39,28 @@ class MemoryRepository<T extends { id: string }> implements Repository<T> {
   }
 
   public async delete(id: string): Promise<void> {
+    if (this.deleteFailure !== null) {
+      throw this.deleteFailure;
+    }
     this.#entities.delete(id);
+  }
+}
+
+class MemoryConversationMessageDeletionRepository
+  implements ConversationMessageDeletionRepository
+{
+  public constructor(
+    private readonly conversations: Repository<Conversation>,
+    private readonly messages: Repository<Message>,
+  ) {}
+
+  public async deleteConversationAndMessages(conversationId: string): Promise<void> {
+    for (const message of await this.messages.list()) {
+      if (message.conversationId === conversationId) {
+        await this.messages.delete(message.id);
+      }
+    }
+    await this.conversations.delete(conversationId);
   }
 }
 
@@ -68,11 +94,23 @@ const conversation: Conversation = {
   updatedAt: timestamp,
 };
 
+const message: Message = {
+  id: "33333333-3333-4333-8333-333333333333",
+  conversationId: conversation.id,
+  role: "user",
+  content: "Keep this local.",
+  createdAt: timestamp,
+};
+
 function createRepositories(
   settings: AppSettings,
   initialMemories: readonly Memory[] = [],
+  conversations: Repository<Conversation> = new MemoryRepository<Conversation>([
+    conversation,
+  ]),
 ): IndexedDbRepositories {
   const characters = new MemoryRepository<Character>([character]);
+  const messages = new MemoryRepository<Message>();
 
   return {
     characters,
@@ -85,8 +123,10 @@ function createRepositories(
       saveForExistingCharacter: async () => ({ kind: "saved" }),
     },
     personas: new MemoryRepository<Persona>(),
-    conversations: new MemoryRepository<Conversation>([conversation]),
-    messages: new MemoryRepository<Message>(),
+    conversationMessageDeletion:
+      new MemoryConversationMessageDeletionRepository(conversations, messages),
+    conversations,
+    messages,
     memories: new MemoryRepository<Memory>(initialMemories),
     settings: new MemorySettingsRepository(settings),
   };
@@ -191,6 +231,56 @@ describe("BrowserChatService provider credentials", () => {
     await expect(service.load()).resolves.toMatchObject({
       providerLabel: "Provider unavailable",
     });
+  });
+
+  it("deletes a conversation and its messages through the application service", async () => {
+    const settings: AppSettings = { theme: "system", providers: [] };
+    const repositories = createRepositories(settings);
+    await repositories.messages.save(message);
+    const service = new BrowserChatService({
+      repositories,
+      storage: localStorage,
+      testDouble: "stream",
+    });
+
+    await expect(
+      service.deleteConversation(conversation.id),
+    ).resolves.toBeUndefined();
+    await expect(service.load()).resolves.toMatchObject({
+      conversations: [],
+    });
+    await expect(repositories.messages.list()).resolves.toEqual([]);
+  });
+
+  it("normalizes invalid and missing conversation deletion requests", async () => {
+    const settings: AppSettings = { theme: "system", providers: [] };
+    const service = new BrowserChatService({
+      repositories: createRepositories(settings),
+      storage: localStorage,
+      testDouble: "stream",
+    });
+
+    await expect(service.deleteConversation("invalid-id")).rejects.toThrow(
+      "The conversation could not be deleted.",
+    );
+    await expect(
+      service.deleteConversation("33333333-3333-4333-8333-333333333333"),
+    ).rejects.toThrow("The selected conversation could not be found.");
+  });
+
+  it("normalizes a local conversation deletion storage failure", async () => {
+    const settings: AppSettings = { theme: "system", providers: [] };
+    const conversations = new MemoryRepository<Conversation>([conversation]);
+    conversations.deleteFailure = new Error("Bearer local-secret");
+    const service = new BrowserChatService({
+      repositories: createRepositories(settings, [], conversations),
+      storage: localStorage,
+      testDouble: "stream",
+    });
+
+    await expect(
+      service.deleteConversation(conversation.id),
+    ).rejects.toThrow("Local data could not be deleted.");
   });
   it("adds bounded active-character memories only when context consent is enabled", async () => {
     const settings: AppSettings = {

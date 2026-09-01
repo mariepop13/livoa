@@ -80,4 +80,5 @@ export interface ConversationApplicationService {
   retrieve(
     id: unknown,
   ): Promise<ConversationUseCaseResult<ConversationWithMessages>>;
+  delete(id: unknown): Promise<ConversationUseCaseResult<void>>;
 }

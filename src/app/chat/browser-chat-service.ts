@@ -217,6 +217,7 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
     this.#conversationService = createConversationApplicationService(
       repositories.conversations,
       repositories.messages,
+      repositories.conversationMessageDeletion,
     );
     this.#providerSettings = new ProviderSettingsService(
       repositories.settings,
@@ -273,6 +274,14 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
     return unwrapConversationResult(
       result,
       "The conversation could not be loaded.",
+    );
+  }
+
+  public async deleteConversation(id: string): Promise<void> {
+    const result = await this.#conversationService.delete(id);
+    return unwrapConversationResult(
+      result,
+      "The conversation could not be deleted.",
     );
   }
 

@@ -13,7 +13,11 @@ import type {
   BrowserChatSnapshot,
   PersonaAwareChatAdapter,
 } from "./browser-chat-service";
-import type { ChatStreamInput, ChatStreamOutcome } from "./chat-adapter";
+import {
+  ChatAdapterError,
+  type ChatStreamInput,
+  type ChatStreamOutcome,
+} from "./chat-adapter";
 
 const characterId = "11111111-1111-4111-8111-111111111111";
 const conversationId = "22222222-2222-4222-8222-222222222222";
@@ -42,6 +46,12 @@ const conversation: Conversation = {
   updatedAt: timestamp,
 };
 
+const secondConversation: Conversation = {
+  ...conversation,
+  id: "77777777-7777-4777-8777-777777777777",
+  title: "A second conversation",
+};
+
 const persona: Persona = {
   id: personaId,
   name: "Ada Lovelace",
@@ -61,19 +71,26 @@ const secondPersona: Persona = {
 class FakeChatAdapter implements PersonaAwareChatAdapter {
   readonly #mode: "complete" | "error";
   readonly #messages: Message[] = [];
+  #conversations: Conversation[];
   public readonly createdConversationInputs: Array<{
     characterId: string;
     personaId: string | undefined;
   }> = [];
+  public readonly deletedConversationIds: string[] = [];
+  public deleteFailure: ChatAdapterError | undefined;
 
-  public constructor(mode: "complete" | "error" = "complete") {
+  public constructor(
+    mode: "complete" | "error" = "complete",
+    conversations: Conversation[] = [conversation],
+  ) {
     this.#mode = mode;
+    this.#conversations = conversations;
   }
 
   public async load(): Promise<BrowserChatSnapshot> {
     return {
       characters: [character],
-      conversations: [conversation],
+      conversations: [...this.#conversations],
       personas: [persona, secondPersona],
       providerLabel: "Local test provider",
     };
@@ -90,11 +107,39 @@ class FakeChatAdapter implements PersonaAwareChatAdapter {
     return conversation;
   }
 
-  public async retrieveConversation(): Promise<{
+  public async retrieveConversation(id: string): Promise<{
     conversation: Conversation;
     messages: readonly Message[];
   }> {
-    return { conversation, messages: [...this.#messages] };
+    const selectedConversation = this.#conversations.find(
+      (candidate) => candidate.id === id,
+    );
+    if (selectedConversation === undefined) {
+      throw new ChatAdapterError("The selected conversation could not be found.");
+    }
+
+    return {
+      conversation: selectedConversation,
+      messages: this.#messages.filter(
+        (message) => message.conversationId === id,
+      ),
+    };
+  }
+
+  public async deleteConversation(id: string): Promise<void> {
+    if (this.deleteFailure !== undefined) {
+      throw this.deleteFailure;
+    }
+
+    this.deletedConversationIds.push(id);
+    this.#conversations = this.#conversations.filter(
+      (conversation) => conversation.id !== id,
+    );
+    for (let index = this.#messages.length - 1; index >= 0; index -= 1) {
+      if (this.#messages[index]?.conversationId === id) {
+        this.#messages.splice(index, 1);
+      }
+    }
   }
 
   public async streamMessage(
@@ -168,6 +213,77 @@ describe("ChatScreen", () => {
     expect(adapter.createdConversationInputs).toEqual([
       { characterId, personaId: secondPersonaId },
     ]);
+  });
+
+  it("cancels accessible conversation deletion without changing local state", async () => {
+    const adapter = new FakeChatAdapter();
+    render(<ChatScreen adapter={adapter} />);
+
+    await screen.findByRole("heading", { name: "Chat with your character." });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete selected conversation" }),
+    );
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Permanently delete conversation?",
+    });
+    expect(dialog).toHaveTextContent("This action is irreversible");
+    expect(screen.getByLabelText("Character")).toBeDisabled();
+    expect(screen.getByLabelText("Conversation")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(adapter.deletedConversationIds).toEqual([]);
+    expect(screen.getByLabelText("Conversation")).toHaveValue(conversationId);
+  });
+
+  it("deletes the active conversation and selects the remaining conversation", async () => {
+    const adapter = new FakeChatAdapter("complete", [
+      conversation,
+      secondConversation,
+    ]);
+    render(<ChatScreen adapter={adapter} />);
+
+    await screen.findByRole("heading", { name: "Chat with your character." });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete selected conversation" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Permanently delete" }),
+    );
+
+    expect(
+      await screen.findByRole("status", { name: "Conversation deleted." }),
+    ).toBeVisible();
+    expect(adapter.deletedConversationIds).toEqual([conversationId]);
+    expect(screen.getByLabelText("Conversation")).toHaveValue(
+      secondConversation.id,
+    );
+  });
+
+  it("shows a normalized deletion storage failure and keeps confirmation open", async () => {
+    const adapter = new FakeChatAdapter();
+    adapter.deleteFailure = new ChatAdapterError(
+      "Local data could not be deleted.",
+    );
+    render(<ChatScreen adapter={adapter} />);
+
+    await screen.findByRole("heading", { name: "Chat with your character." });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete selected conversation" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Permanently delete" }),
+    );
+
+    expect(
+      await screen.findByRole("alert", {
+        name: "Local data could not be deleted.",
+      }),
+    ).toBeVisible();
+    expect(screen.getByRole("dialog")).toBeVisible();
+    expect(adapter.deletedConversationIds).toEqual([]);
   });
 
   it("renders a safe provider error without exposing raw details", async () => {

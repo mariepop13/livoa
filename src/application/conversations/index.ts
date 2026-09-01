@@ -15,6 +15,7 @@ export {
 export {
   appendMessage,
   createConversation,
+  deleteConversation,
   createConversationApplicationService,
   getConversation,
   retrieveConversation,

@@ -34,6 +34,10 @@ export interface CharacterMemoryDeletionRepository {
   deleteCharacterAndMemories(characterId: string): Promise<void>;
 }
 
+export interface ConversationMessageDeletionRepository {
+  deleteConversationAndMessages(conversationId: string): Promise<void>;
+}
+
 export type MemoryCharacterWriteResult =
   { kind: "saved" } | { kind: "character_not_found" };
 
