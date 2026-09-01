@@ -88,6 +88,12 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
   const [loadedConversationId, setLoadedConversationId] = useState<string>();
   const [screenError, setScreenError] = useState<string>();
   const [statusMessage, setStatusMessage] = useState<string>();
+  const [conversationPendingDeletion, setConversationPendingDeletion] =
+    useState<Conversation>();
+  const [deletionError, setDeletionError] = useState<string>();
+  const [isDeleting, setIsDeleting] = useState(false);
+  const deletionDialogRef = useRef<HTMLDivElement | null>(null);
+  const isDeletionPending = conversationPendingDeletion !== undefined;
   const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -185,8 +191,12 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
     return () => controllerRef.current?.abort();
   }, []);
 
+  useEffect(() => {
+    deletionDialogRef.current?.focus();
+  }, [conversationPendingDeletion]);
+
   function selectCharacter(characterId: string): void {
-    if (streamStatus !== "idle") {
+    if (streamStatus !== "idle" || isDeleting || isDeletionPending) {
       return;
     }
 
@@ -203,7 +213,7 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
   }
 
   function selectConversation(conversationId: string): void {
-    if (streamStatus !== "idle") {
+    if (streamStatus !== "idle" || isDeleting || isDeletionPending) {
       return;
     }
 
@@ -219,7 +229,7 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
   }
 
   function selectPersona(personaId: string): void {
-    if (streamStatus !== "idle") {
+    if (streamStatus !== "idle" || isDeleting || isDeletionPending) {
       return;
     }
 
@@ -253,7 +263,7 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
   }
 
   async function handleCreateConversation(): Promise<void> {
-    if (streamStatus !== "idle") {
+    if (streamStatus !== "idle" || isDeleting || isDeletionPending) {
       return;
     }
 
@@ -264,6 +274,79 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
       await createConversation();
     } catch (error: unknown) {
       setScreenError(getErrorMessage(error));
+    }
+  }
+
+  function requestConversationDeletion(): void {
+    if (
+      streamStatus !== "idle" ||
+      isDeleting ||
+      isDeletionPending ||
+      activeConversationId === undefined
+    ) {
+      return;
+    }
+
+    const conversation = snapshot?.conversations.find(
+      (candidate) => candidate.id === activeConversationId,
+    );
+    if (conversation === undefined) {
+      return;
+    }
+
+    setDeletionError(undefined);
+    setConversationPendingDeletion(conversation);
+  }
+
+  function cancelConversationDeletion(): void {
+    if (!isDeleting) {
+      setConversationPendingDeletion(undefined);
+      setDeletionError(undefined);
+    }
+  }
+
+  async function confirmConversationDeletion(): Promise<void> {
+    if (
+      activeAdapter === undefined ||
+      conversationPendingDeletion === undefined ||
+      isDeleting
+    ) {
+      return;
+    }
+
+    setIsDeleting(true);
+    setDeletionError(undefined);
+    setScreenError(undefined);
+    setStatusMessage(undefined);
+
+    try {
+      await activeAdapter.deleteConversation(conversationPendingDeletion.id);
+      const remainingConversations = (snapshot?.conversations ?? []).filter(
+        (conversation) => conversation.id !== conversationPendingDeletion.id,
+      );
+      const nextConversation = remainingConversations.find(
+        (conversation) => conversation.characterId === selectedCharacterId,
+      );
+
+      setSnapshot((current) =>
+        current === undefined
+          ? current
+          : { ...current, conversations: remainingConversations },
+      );
+      setSelectedConversationId(nextConversation?.id ?? "");
+      setSelectedPersonaId(nextConversation?.personaId);
+      setMessages([]);
+      setLoadedConversationId(undefined);
+      setPendingUserMessage(undefined);
+      setStreamingText("");
+      setConversationPendingDeletion(undefined);
+      setStatusMessage("Conversation deleted.");
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      setDeletionError(message);
+      setScreenError(message);
+    } finally {
+      setIsDeleting(false);
     }
   }
 
@@ -287,7 +370,9 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
     if (
       activeAdapter === undefined ||
       selectedCharacter === undefined ||
-      streamStatus !== "idle"
+      streamStatus !== "idle" ||
+      isDeleting ||
+      isDeletionPending
     ) {
       return;
     }
@@ -381,11 +466,13 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
 
         <div className="mt-8 grid items-start gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
           <ChatSetup
+            isDeletionPending={isDeletionPending}
             activeConversationId={activeConversationId}
             availableConversations={availableConversations}
             characters={snapshot.characters}
             onSelectPersona={selectPersona}
             onCreateConversation={() => void handleCreateConversation()}
+            onDeleteConversation={requestConversationDeletion}
             onSelectCharacter={selectCharacter}
             onSelectConversation={selectConversation}
             personas={snapshot.personas}
@@ -451,7 +538,10 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
 
             <ChatComposer
               disabled={
-                selectedCharacter === undefined || streamStatus !== "idle"
+                selectedCharacter === undefined ||
+                streamStatus !== "idle" ||
+                isDeleting ||
+                isDeletionPending
               }
               onChange={setComposerValue}
               onSubmit={handleSubmit}
@@ -465,6 +555,60 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
           </section>
         </div>
       </div>
+      {conversationPendingDeletion === undefined ? null : (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
+          <div
+            ref={deletionDialogRef}
+            aria-describedby="delete-conversation-description"
+            aria-labelledby="delete-conversation-title"
+            aria-modal="true"
+            className="w-full max-w-lg rounded-3xl border border-rose-500/50 bg-slate-900 p-6 shadow-2xl"
+            role="dialog"
+            tabIndex={-1}
+          >
+            <h2
+              id="delete-conversation-title"
+              className="text-xl font-bold text-white"
+            >
+              Permanently delete conversation?
+            </h2>
+            <p
+              id="delete-conversation-description"
+              className="mt-3 text-sm leading-6 text-slate-300"
+            >
+              You are permanently deleting{" "}
+              <strong>
+                {conversationPendingDeletion.title ??
+                  `Conversation created ${conversationPendingDeletion.createdAt.toLocaleString()}`}
+              </strong>
+              . This action is irreversible and cannot be undone.
+            </p>
+            {deletionError === undefined ? null : (
+              <p className="mt-4 text-sm text-rose-200" role="alert">
+                {deletionError}
+              </p>
+            )}
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                className="rounded-xl border border-slate-600 px-4 py-2.5 text-sm font-bold text-slate-200 transition hover:border-slate-400 hover:bg-slate-800 focus:outline-none focus:ring-4 focus:ring-cyan-300/30 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={cancelConversationDeletion}
+                disabled={isDeleting}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-xl bg-rose-400 px-4 py-2.5 text-sm font-bold text-rose-950 transition hover:bg-rose-300 focus:outline-none focus:ring-4 focus:ring-rose-300/30 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => void confirmConversationDeletion()}
+                disabled={isDeleting}
+              >
+                {isDeleting ? "Deleting conversation…" : "Permanently delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

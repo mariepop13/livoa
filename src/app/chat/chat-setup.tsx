@@ -5,7 +5,9 @@ type ChatSetupProps = Readonly<{
   availableConversations: readonly Conversation[];
   characters: readonly Character[];
   personas: readonly Persona[];
+  isDeletionPending: boolean;
   onCreateConversation: () => void;
+  onDeleteConversation: () => void;
   onSelectCharacter: (characterId: string) => void;
   onSelectConversation: (conversationId: string) => void;
   onSelectPersona: (personaId: string) => void;
@@ -29,7 +31,9 @@ export default function ChatSetup({
   availableConversations,
   characters,
   personas,
+  isDeletionPending,
   onCreateConversation,
+  onDeleteConversation,
   onSelectCharacter,
   onSelectConversation,
   onSelectPersona,
@@ -40,7 +44,7 @@ export default function ChatSetup({
   selectedPersonaId,
   streamStatus,
 }: ChatSetupProps) {
-  const isBusy = streamStatus !== "idle";
+  const isBusy = streamStatus !== "idle" || isDeletionPending;
 
   return (
     <aside
@@ -132,6 +136,14 @@ export default function ChatSetup({
             disabled={isBusy}
           >
             Start conversation with {selectedCharacter.name}
+          </button>
+          <button
+            type="button"
+            className="mt-3 w-full rounded-xl border border-rose-700 px-4 py-2.5 text-sm font-bold text-rose-200 transition hover:border-rose-500 hover:bg-rose-950/50 focus:outline-none focus:ring-4 focus:ring-rose-300/30 disabled:cursor-not-allowed disabled:opacity-60"
+            onClick={onDeleteConversation}
+            disabled={isBusy || activeConversationId === undefined}
+          >
+            Delete selected conversation
           </button>
         </div>
       ) : null}

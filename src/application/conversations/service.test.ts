@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Conversation, Message } from "../../domain/models";
 import type {
+  ConversationMessageDeletionRepository,
   ConversationRepository,
   MessageRepository,
 } from "../../domain/ports";
@@ -9,6 +10,7 @@ import {
   appendMessage,
   createConversation,
   createConversationApplicationService,
+  deleteConversation,
   retrieveConversation,
   updateConversationTitle,
 } from "./service";
@@ -53,8 +55,10 @@ class MemoryConversationRepository implements ConversationRepository {
 
   public getByIdCalls = 0;
   public saveCalls = 0;
+  public deleteCalls = 0;
   public getByIdFailure: unknown = null;
   public saveFailure: unknown = null;
+  public deleteFailure: unknown = null;
 
   public constructor(initialConversations: Conversation[] = []) {
     for (const initialConversation of initialConversations) {
@@ -83,6 +87,10 @@ class MemoryConversationRepository implements ConversationRepository {
   }
 
   public async delete(id: string): Promise<void> {
+    this.deleteCalls += 1;
+    if (this.deleteFailure !== null) {
+      throw this.deleteFailure;
+    }
     this.conversations.delete(id);
   }
 }
@@ -92,8 +100,10 @@ class MemoryMessageRepository implements MessageRepository {
 
   public listCalls = 0;
   public saveCalls = 0;
+  public deleteCalls = 0;
   public listFailure: unknown = null;
   public saveFailure: unknown = null;
+  public deleteFailure: unknown = null;
 
   public constructor(initialMessages: Message[] = []) {
     this.messages = [...initialMessages];
@@ -120,6 +130,10 @@ class MemoryMessageRepository implements MessageRepository {
   }
 
   public async delete(id: string): Promise<void> {
+    this.deleteCalls += 1;
+    if (this.deleteFailure !== null) {
+      throw this.deleteFailure;
+    }
     const index = this.messages.findIndex((message) => message.id === id);
     if (index !== -1) {
       this.messages.splice(index, 1);
@@ -127,12 +141,40 @@ class MemoryMessageRepository implements MessageRepository {
   }
 }
 
+class MemoryConversationMessageDeletionRepository
+  implements ConversationMessageDeletionRepository
+{
+  public deleteCalls = 0;
+  public deleteFailure: unknown = null;
+
+  public constructor(
+    private readonly conversations: ConversationRepository,
+    private readonly messages: MessageRepository,
+  ) {}
+
+  public async deleteConversationAndMessages(conversationId: string): Promise<void> {
+    this.deleteCalls += 1;
+    if (this.deleteFailure !== null) {
+      throw this.deleteFailure;
+    }
+
+    for (const message of await this.messages.list()) {
+      if (message.conversationId === conversationId) {
+        await this.messages.delete(message.id);
+      }
+    }
+    await this.conversations.delete(conversationId);
+  }
+}
+
 describe("conversation application service", () => {
   it("creates and updates a conversation through the repository port", async () => {
     const repository = new MemoryConversationRepository();
+    const messages = new MemoryMessageRepository();
     const service = createConversationApplicationService(
       repository,
-      new MemoryMessageRepository(),
+      messages,
+      new MemoryConversationMessageDeletionRepository(repository, messages),
       { generateId: () => secondConversationId, now: () => timestamp },
     );
 
@@ -237,9 +279,57 @@ describe("conversation application service", () => {
     expect(messageRepository.listCalls).toBe(1);
   });
 
+  it("deletes all messages for an existing conversation before the conversation", async () => {
+    const secondConversation: Conversation = {
+      ...conversation,
+      id: secondConversationId,
+    };
+    const otherConversationMessage: Message = {
+      ...firstMessage,
+      id: "55555555-5555-4555-8555-555555555555",
+      conversationId: secondConversationId,
+    };
+    const conversationRepository = new MemoryConversationRepository([
+      conversation,
+      secondConversation,
+    ]);
+    const messageRepository = new MemoryMessageRepository([
+      firstMessage,
+      secondMessage,
+      otherConversationMessage,
+    ]);
+    const conversationMessageDeletion =
+      new MemoryConversationMessageDeletionRepository(
+        conversationRepository,
+        messageRepository,
+      );
+
+    await expect(
+      deleteConversation(
+        conversationRepository,
+        conversationMessageDeletion,
+        conversationId,
+      ),
+    ).resolves.toEqual({ ok: true, data: undefined });
+    await expect(conversationRepository.list()).resolves.toEqual([
+      secondConversation,
+    ]);
+    await expect(messageRepository.list()).resolves.toEqual([
+      otherConversationMessage,
+    ]);
+    expect(conversationRepository.deleteCalls).toBe(1);
+    expect(messageRepository.deleteCalls).toBe(2);
+    expect(conversationMessageDeletion.deleteCalls).toBe(1);
+  });
+
   it("returns validation and not-found failures without touching storage", async () => {
     const conversationRepository = new MemoryConversationRepository();
     const messageRepository = new MemoryMessageRepository();
+    const conversationMessageDeletion =
+      new MemoryConversationMessageDeletionRepository(
+        conversationRepository,
+        messageRepository,
+      );
 
     await expect(
       createConversation(conversationRepository, {
@@ -265,6 +355,16 @@ describe("conversation application service", () => {
       error: { kind: "validation", code: "VALIDATION_ERROR" },
     });
     await expect(
+      deleteConversation(
+        conversationRepository,
+        conversationMessageDeletion,
+        "bad-id",
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { kind: "validation", code: "VALIDATION_ERROR" },
+    });
+    await expect(
       updateConversationTitle(conversationRepository, {
         id: conversationId,
         title: "Missing",
@@ -273,9 +373,22 @@ describe("conversation application service", () => {
       ok: false,
       error: { kind: "not_found", code: "NOT_FOUND", id: conversationId },
     });
-    expect(conversationRepository.getByIdCalls).toBe(1);
+    await expect(
+      deleteConversation(
+        conversationRepository,
+        conversationMessageDeletion,
+        conversationId,
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      error: { kind: "not_found", code: "NOT_FOUND", id: conversationId },
+    });
+    expect(conversationRepository.getByIdCalls).toBe(2);
     expect(conversationRepository.saveCalls).toBe(0);
+    expect(conversationRepository.deleteCalls).toBe(0);
     expect(messageRepository.saveCalls).toBe(0);
+    expect(messageRepository.deleteCalls).toBe(0);
+    expect(conversationMessageDeletion.deleteCalls).toBe(0);
   });
 
   it("normalizes repository failures without exposing their details", async () => {
@@ -283,6 +396,11 @@ describe("conversation application service", () => {
       conversation,
     ]);
     const messageRepository = new MemoryMessageRepository();
+    const conversationMessageDeletion =
+      new MemoryConversationMessageDeletionRepository(
+        conversationRepository,
+        messageRepository,
+      );
     const secret = "Bearer conversation-secret";
 
     conversationRepository.saveFailure = new Error(secret);
@@ -341,6 +459,26 @@ describe("conversation application service", () => {
         error: {
           code: "STORAGE_ERROR",
           message: "Local data could not be read.",
+        },
+      },
+    });
+
+    messageRepository.listFailure = null;
+    conversationMessageDeletion.deleteFailure = new Error(secret);
+    await expect(
+      deleteConversation(
+        conversationRepository,
+        conversationMessageDeletion,
+        conversationId,
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        kind: "application",
+        code: "STORAGE_ERROR",
+        error: {
+          code: "STORAGE_ERROR",
+          message: "Local data could not be deleted.",
         },
       },
     });
