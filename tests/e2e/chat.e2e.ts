@@ -54,6 +54,66 @@ test("shows the accessible chat flow and streamed response", async ({
   ).toBeVisible();
 });
 
+test("renders safe Markdown in a persisted chat message after reload", async ({
+  page,
+}) => {
+  await openChat(page, "stream");
+
+  await page.getByLabel("Message", { exact: true }).fill(`# Markdown note
+
+- First item
+- Second item
+
+[Safe documentation](https://example.com)
+
+\`\`\`ts
+const greeting = "hello";
+console.log(greeting);
+\`\`\`
+
+<img src=x onerror="window.__xss = true">
+
+[Unsafe link](javascript:alert(1))`);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByRole("status")).toHaveText("Response complete.");
+
+  const messages = page.getByRole("list", { name: "Conversation messages" });
+  await expect(
+    messages.getByRole("heading", { name: "Markdown note" }),
+  ).toBeVisible();
+  await expect(messages.getByRole("list")).toContainText("First item");
+  await expect(
+    messages.getByRole("link", { name: "Safe documentation" }),
+  ).toHaveAttribute("target", "_blank");
+  await expect(
+    messages.getByRole("link", { name: "Safe documentation" }),
+  ).toHaveAttribute("rel", "noopener noreferrer");
+  expect(await messages.locator("pre").textContent()).toBe(
+    'const greeting = "hello";\nconsole.log(greeting);\n',
+  );
+  await expect(messages.getByText(/<img src=x/)).toBeVisible();
+  await expect(messages.locator("img")).toHaveCount(0);
+  await expect(messages.getByRole("link", { name: "Unsafe link" })).toHaveCount(
+    0,
+  );
+
+  await page.reload();
+
+  const restoredMessages = page.getByRole("list", {
+    name: "Conversation messages",
+  });
+  await expect(
+    restoredMessages.getByRole("heading", { name: "Markdown note" }),
+  ).toBeVisible();
+  expect(await restoredMessages.locator("pre").textContent()).toBe(
+    'const greeting = "hello";\nconsole.log(greeting);\n',
+  );
+  await expect(restoredMessages.locator("img")).toHaveCount(0);
+  await expect(
+    restoredMessages.getByRole("link", { name: "Unsafe link" }),
+  ).toHaveCount(0);
+});
+
 test("cancels an in-flight deterministic response", async ({ page }) => {
   await openChat(page, "slow");
 

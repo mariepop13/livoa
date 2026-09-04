@@ -1,4 +1,5 @@
 import type { Message } from "@/domain/models";
+import MarkdownMessage from "./markdown-message";
 
 type ChatMessageListProps = Readonly<{
   activeConversationId: string | undefined;
@@ -18,9 +19,7 @@ function MessageBubble({ message }: Readonly<{ message: Message }>) {
       <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
         {isUser ? "You" : "Assistant"}
       </p>
-      <p className="mt-2 whitespace-pre-wrap leading-7 text-slate-100">
-        {message.content}
-      </p>
+      <MarkdownMessage content={message.content} />
     </li>
   );
 }
@@ -39,9 +38,7 @@ function PendingMessage({
       <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
         {role === "user" ? "You" : "Assistant"}
       </p>
-      <p className="mt-2 whitespace-pre-wrap leading-7 text-slate-100">
-        {content}
-      </p>
+      <MarkdownMessage content={content} />
     </li>
   );
 }
