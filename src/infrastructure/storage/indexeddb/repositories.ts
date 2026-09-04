@@ -21,7 +21,9 @@ import type {
   CharacterMemoryDeletionRepository,
   CharacterRepository,
   ConversationMessageDeletionRepository,
+  ConversationMessageSequenceRepository,
   ConversationRepository,
+  MessageSequenceReplacement,
   MemoryCharacterWriteRepository,
   MemoryCharacterWriteResult,
   MemoryRepository,
@@ -149,6 +151,15 @@ interface ConversationMessageDeletionTransaction {
   execute(work: () => Promise<void>): Promise<void>;
 }
 
+interface ConversationMessageSequenceTable {
+  delete(id: string): Promise<void>;
+  put(record: StoredMessage): Promise<unknown>;
+}
+
+interface ConversationMessageSequenceTransaction {
+  execute(work: () => Promise<void>): Promise<void>;
+}
+
 export class IndexedDbCharacterMemoryDeletionRepository implements CharacterMemoryDeletionRepository {
   public constructor(
     private readonly transaction: CharacterMemoryDeletionTransaction,
@@ -184,6 +195,30 @@ export class IndexedDbConversationMessageDeletionRepository
         .equals(conversationId)
         .delete();
       await this.conversations.delete(conversationId);
+    });
+  }
+}
+
+export class IndexedDbConversationMessageSequenceRepository implements ConversationMessageSequenceRepository {
+  public constructor(
+    private readonly transaction: ConversationMessageSequenceTransaction,
+    private readonly messages: ConversationMessageSequenceTable,
+  ) {}
+
+  public async replaceMessageSequence(
+    input: MessageSequenceReplacement,
+  ): Promise<void> {
+    const messages = input.messages.map((message) =>
+      storedMessageSchema.parse(serializeMessage(messageSchema.parse(message))),
+    );
+
+    await this.transaction.execute(async () => {
+      for (const messageId of input.deletedMessageIds) {
+        await this.messages.delete(messageId);
+      }
+      for (const message of messages) {
+        await this.messages.put(message);
+      }
     });
   }
 }
@@ -392,6 +427,7 @@ export interface IndexedDbRepositories {
   memoryCharacterWrite: MemoryCharacterWriteRepository;
   personas: PersonaRepository;
   conversationMessageDeletion: ConversationMessageDeletionRepository;
+  conversationMessageSequence: ConversationMessageSequenceRepository;
   conversations: ConversationRepository;
   messages: MessageRepository;
   memories: MemoryRepository;
@@ -433,6 +469,10 @@ export function createIndexedDbRepositories(
           work,
         ),
     };
+  const conversationMessageSequenceTransaction: ConversationMessageSequenceTransaction =
+    {
+      execute: (work) => database.transaction("rw", database.messages, work),
+    };
   return {
     characters: new IndexedDbCharacterRepository(database),
     characterCards: new IndexedDbCharacterCardRepository(database),
@@ -460,6 +500,10 @@ export function createIndexedDbRepositories(
     conversationMessageDeletion: new IndexedDbConversationMessageDeletionRepository(
       conversationMessageDeletionTransaction,
       database.conversations,
+      database.messages,
+    ),
+    conversationMessageSequence: new IndexedDbConversationMessageSequenceRepository(
+      conversationMessageSequenceTransaction,
       database.messages,
     ),
   };

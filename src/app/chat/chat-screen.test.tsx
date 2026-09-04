@@ -115,7 +115,9 @@ class FakeChatAdapter implements PersonaAwareChatAdapter {
       (candidate) => candidate.id === id,
     );
     if (selectedConversation === undefined) {
-      throw new ChatAdapterError("The selected conversation could not be found.");
+      throw new ChatAdapterError(
+        "The selected conversation could not be found.",
+      );
     }
 
     return {
@@ -140,6 +142,92 @@ class FakeChatAdapter implements PersonaAwareChatAdapter {
         this.#messages.splice(index, 1);
       }
     }
+  }
+
+  public async editUserMessage(input: {
+    conversationId: string;
+    messageId: string;
+    content: string;
+  }): Promise<void> {
+    const index = this.#messages.findIndex(
+      (message) =>
+        message.id === input.messageId &&
+        message.conversationId === input.conversationId,
+    );
+    if (index === -1) {
+      throw new ChatAdapterError("The selected message could not be found.");
+    }
+    const message = this.#messages[index];
+    if (message === undefined || message.role !== "user") {
+      throw new ChatAdapterError("The selected message cannot be edited.");
+    }
+    this.#messages.splice(index, this.#messages.length - index, {
+      ...message,
+      content: input.content,
+    });
+  }
+
+  public async deleteMessage(input: {
+    conversationId: string;
+    messageId: string;
+    discardFollowing: boolean;
+  }): Promise<void> {
+    const index = this.#messages.findIndex(
+      (message) =>
+        message.id === input.messageId &&
+        message.conversationId === input.conversationId,
+    );
+    if (index === -1) {
+      throw new ChatAdapterError("The selected message could not be found.");
+    }
+    this.#messages.splice(
+      index,
+      input.discardFollowing ? this.#messages.length - index : 1,
+    );
+  }
+
+  public async regenerateMessage(input: {
+    onAssistantText: (content: string) => void;
+  }): Promise<{
+    status: "completed";
+    content: string;
+    model: string;
+    provider: string;
+  }> {
+    input.onAssistantText("A regenerated response");
+    return {
+      status: "completed",
+      content: "A regenerated response",
+      model: "local-test-model",
+      provider: "local-test-provider",
+    };
+  }
+
+  public async replaceAssistantMessage(input: {
+    conversationId: string;
+    messageId: string;
+    content: string;
+    model: string;
+    provider: string;
+  }): Promise<void> {
+    const index = this.#messages.findIndex(
+      (message) =>
+        message.id === input.messageId &&
+        message.conversationId === input.conversationId,
+    );
+    if (index === -1) {
+      throw new ChatAdapterError("The selected message could not be found.");
+    }
+    const message = this.#messages[index];
+    if (message === undefined || message.role !== "assistant") {
+      throw new ChatAdapterError("The selected message cannot be regenerated.");
+    }
+    this.#messages.splice(index, this.#messages.length - index, {
+      ...message,
+      content: input.content,
+      model: input.model,
+      provider: input.provider,
+    });
   }
 
   public async streamMessage(

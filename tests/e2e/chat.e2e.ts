@@ -181,6 +181,122 @@ test("permanently deletes the active local conversation and survives reload", as
   await expect(page.getByRole("status")).toHaveText("Response complete.");
 });
 
+test("edits, regenerates, and deletes coherent local message sequences", async ({
+  page,
+}) => {
+  await openChat(page, "stream");
+
+  await page.getByLabel("Message", { exact: true }).fill("Original question.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByRole("status")).toHaveText("Response complete.");
+
+  const messages = page.getByRole("list", { name: "Conversation messages" });
+  const originalUserMessage = messages
+    .getByRole("listitem")
+    .filter({ hasText: "Original question." });
+  await originalUserMessage
+    .getByRole("button", { name: "Edit message" })
+    .click();
+  const editDialog = page.getByRole("dialog", {
+    name: "Edit message and keep a coherent history?",
+  });
+  await expect(editDialog).toContainText("discard 1 later message");
+  await editDialog.getByLabel("Message").fill("Edited question.");
+  await editDialog
+    .getByRole("button", { name: "Save edit and discard following messages" })
+    .click();
+  await expect(page.getByRole("status")).toHaveText(
+    "Message edited; following history discarded.",
+  );
+  await expect(messages.getByText("Edited question.")).toBeVisible();
+  await expect(
+    messages.getByText("A local response is arriving in safe chunks."),
+  ).toHaveCount(0);
+
+  await page.reload();
+  await expect(messages.getByText("Edited question.")).toBeVisible();
+  await expect(
+    messages.getByText("A local response is arriving in safe chunks."),
+  ).toHaveCount(0);
+
+  await page.getByLabel("Message", { exact: true }).fill("Try another answer.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByRole("status")).toHaveText("Response complete.");
+
+  const assistantMessage = messages
+    .getByRole("listitem")
+    .filter({ hasText: "A local response is arriving in safe chunks." });
+  await assistantMessage
+    .getByRole("button", { name: "Regenerate response" })
+    .click();
+  await page
+    .getByRole("button", { name: "Generate replacement preview" })
+    .click();
+  const regenerationDialog = page.getByRole("dialog", {
+    name: "Use regenerated response?",
+  });
+  await expect(regenerationDialog).toContainText(
+    "A local response is arriving in safe chunks.",
+  );
+  await regenerationDialog
+    .getByRole("button", { name: "Keep existing response" })
+    .click();
+  await expect(
+    messages.getByText("A local response is arriving in safe chunks."),
+  ).toBeVisible();
+
+  await assistantMessage
+    .getByRole("button", { name: "Regenerate response" })
+    .click();
+  await page
+    .getByRole("button", { name: "Generate replacement preview" })
+    .click();
+  await page.getByRole("button", { name: "Replace saved response" }).click();
+  await expect(page.getByRole("status")).toHaveText(
+    "Regenerated response saved; prior response discarded.",
+  );
+  await page.reload();
+  await expect(
+    messages.getByText("A local response is arriving in safe chunks."),
+  ).toBeVisible();
+
+  await messages.getByRole("button", { name: "Delete message" }).last().click();
+  const deleteDialog = page.getByRole("dialog", { name: "Delete message?" });
+  await expect(deleteDialog).toContainText("permanently discard this message");
+  await deleteDialog.getByRole("button", { name: "Delete message" }).click();
+  await expect(page.getByRole("status")).toHaveText("Message deleted.");
+  await page.reload();
+  await expect(
+    messages.getByText("A local response is arriving in safe chunks."),
+  ).toHaveCount(0);
+});
+
+test("cancelling regeneration retains the saved assistant response", async ({
+  page,
+}) => {
+  await openChat(page, "slow");
+
+  await page.getByLabel("Message", { exact: true }).fill("Keep this answer.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByRole("status")).toHaveText("Response complete.");
+
+  const messages = page.getByRole("list", { name: "Conversation messages" });
+  await messages.getByRole("button", { name: "Regenerate response" }).click();
+  await page
+    .getByRole("button", { name: "Generate replacement preview" })
+    .click();
+  await page.getByRole("button", { name: "Cancel generation" }).click();
+  await expect(page.getByRole("status")).toHaveText("Response cancelled.");
+  await expect(
+    messages.getByText("A local response is arriving in safe chunks."),
+  ).toBeVisible();
+
+  await page.reload();
+  await expect(
+    messages.getByText("A local response is arriving in safe chunks."),
+  ).toBeVisible();
+});
+
 test("shows a normalized safe error for a provider failure", async ({
   page,
 }) => {

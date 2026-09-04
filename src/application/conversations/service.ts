@@ -76,6 +76,18 @@ function getTimestamp(dependencies: ConversationUseCaseDependencies): Date {
   return new Date(timestamp.getTime());
 }
 
+function compareIds(left: string, right: string): number {
+  const comparedLength = Math.min(left.length, right.length);
+  for (let index = 0; index < comparedLength; index += 1) {
+    const byCodeUnit = left.charCodeAt(index) - right.charCodeAt(index);
+    if (byCodeUnit !== 0) {
+      return byCodeUnit;
+    }
+  }
+
+  return left.length - right.length;
+}
+
 function parseConversation(
   value: unknown,
 ): ConversationUseCaseResult<Conversation> {
@@ -243,13 +255,10 @@ export async function retrieveConversation(
 
   const conversationMessages = parsedMessages.data
     .filter((message) => message.conversationId === parsedId.data)
-    .map((message, index) => ({ message, index }))
     .sort((left, right) => {
-      const byCreatedAt =
-        left.message.createdAt.getTime() - right.message.createdAt.getTime();
-      return byCreatedAt === 0 ? left.index - right.index : byCreatedAt;
-    })
-    .map(({ message }) => message);
+      const byCreatedAt = left.createdAt.getTime() - right.createdAt.getTime();
+      return byCreatedAt === 0 ? compareIds(left.id, right.id) : byCreatedAt;
+    });
 
   return success({
     conversation: parsedConversation.data,

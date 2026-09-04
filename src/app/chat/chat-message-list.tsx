@@ -1,4 +1,5 @@
 import type { Message } from "@/domain/models";
+import ChatMessageActions from "./chat-message-actions";
 import MarkdownMessage from "./markdown-message";
 
 type ChatMessageListProps = Readonly<{
@@ -7,9 +8,25 @@ type ChatMessageListProps = Readonly<{
   messages: readonly Message[];
   pendingUserMessage: string | undefined;
   streamingText: string;
+  actionsDisabled: boolean;
+  onDeleteMessage: (message: Message) => void;
+  onEditMessage: (message: Message) => void;
+  onRegenerateMessage: (message: Message) => void;
 }>;
 
-function MessageBubble({ message }: Readonly<{ message: Message }>) {
+function MessageBubble({
+  actionsDisabled,
+  message,
+  onDeleteMessage,
+  onEditMessage,
+  onRegenerateMessage,
+}: Readonly<{
+  actionsDisabled: boolean;
+  message: Message;
+  onDeleteMessage: (message: Message) => void;
+  onEditMessage: (message: Message) => void;
+  onRegenerateMessage: (message: Message) => void;
+}>) {
   const isUser = message.role === "user";
 
   return (
@@ -20,6 +37,13 @@ function MessageBubble({ message }: Readonly<{ message: Message }>) {
         {isUser ? "You" : "Assistant"}
       </p>
       <MarkdownMessage content={message.content} />
+      <ChatMessageActions
+        disabled={actionsDisabled}
+        message={message}
+        onDelete={onDeleteMessage}
+        onEdit={onEditMessage}
+        onRegenerate={onRegenerateMessage}
+      />
     </li>
   );
 }
@@ -49,6 +73,10 @@ export default function ChatMessageList({
   messages,
   pendingUserMessage,
   streamingText,
+  actionsDisabled,
+  onDeleteMessage,
+  onEditMessage,
+  onRegenerateMessage,
 }: ChatMessageListProps) {
   const visibleMessages =
     loadedConversationId === activeConversationId ? messages : [];
@@ -56,7 +84,14 @@ export default function ChatMessageList({
   return (
     <ol className="mt-6 space-y-4" aria-label="Conversation messages">
       {visibleMessages.map((message) => (
-        <MessageBubble key={message.id} message={message} />
+        <MessageBubble
+          key={message.id}
+          actionsDisabled={actionsDisabled}
+          message={message}
+          onDeleteMessage={onDeleteMessage}
+          onEditMessage={onEditMessage}
+          onRegenerateMessage={onRegenerateMessage}
+        />
       ))}
       {pendingUserMessage !== undefined ? (
         <PendingMessage role="user" content={pendingUserMessage} />

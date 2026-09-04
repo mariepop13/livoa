@@ -46,15 +46,15 @@ class MemoryRepository<T extends { id: string }> implements Repository<T> {
   }
 }
 
-class MemoryConversationMessageDeletionRepository
-  implements ConversationMessageDeletionRepository
-{
+class MemoryConversationMessageDeletionRepository implements ConversationMessageDeletionRepository {
   public constructor(
     private readonly conversations: Repository<Conversation>,
     private readonly messages: Repository<Message>,
   ) {}
 
-  public async deleteConversationAndMessages(conversationId: string): Promise<void> {
+  public async deleteConversationAndMessages(
+    conversationId: string,
+  ): Promise<void> {
     for (const message of await this.messages.list()) {
       if (message.conversationId === conversationId) {
         await this.messages.delete(message.id);
@@ -125,6 +125,19 @@ function createRepositories(
     personas: new MemoryRepository<Persona>(),
     conversationMessageDeletion:
       new MemoryConversationMessageDeletionRepository(conversations, messages),
+    conversationMessageSequence: {
+      replaceMessageSequence: async ({
+        deletedMessageIds,
+        messages: replacements,
+      }) => {
+        for (const messageId of deletedMessageIds) {
+          await messages.delete(messageId);
+        }
+        for (const replacement of replacements) {
+          await messages.save(replacement);
+        }
+      },
+    },
     conversations,
     messages,
     memories: new MemoryRepository<Memory>(initialMemories),
@@ -278,10 +291,88 @@ describe("BrowserChatService provider credentials", () => {
       testDouble: "stream",
     });
 
-    await expect(
-      service.deleteConversation(conversation.id),
-    ).rejects.toThrow("Local data could not be deleted.");
+    await expect(service.deleteConversation(conversation.id)).rejects.toThrow(
+      "Local data could not be deleted.",
+    );
   });
+  it("regenerates from the messages visibly preceding the selected assistant without persisting a draft", async () => {
+    const settings: AppSettings = {
+      theme: "system",
+      providers: [
+        {
+          id: "configured",
+          providerId: "openrouter",
+          baseUrl: "https://openrouter.ai/api/v1",
+          selectedModelId: "openai/gpt-5",
+          enabled: true,
+        },
+      ],
+    };
+    localStorage.setItem(
+      credentialStorageKey({
+        configurationId: "configured",
+        providerId: "openrouter",
+      }),
+      "secret",
+    );
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(eventStreamResponse());
+    vi.stubGlobal("fetch", fetcher);
+    const repositories = createRepositories(settings);
+    const preceding: Message = {
+      ...message,
+      id: "44444444-4444-4444-8444-444444444444",
+      role: "user",
+      content: "Visible question",
+    };
+    const selectedAssistant: Message = {
+      ...message,
+      id: "55555555-5555-4555-8555-555555555555",
+      role: "assistant",
+      content: "Saved answer",
+    };
+    const later: Message = {
+      ...message,
+      id: "66666666-6666-4666-8666-666666666666",
+      role: "user",
+      content: "Later visible question",
+    };
+    await repositories.messages.save(preceding);
+    await repositories.messages.save(selectedAssistant);
+    await repositories.messages.save(later);
+    const service = new BrowserChatService({
+      repositories,
+      storage: localStorage,
+    });
+
+    const outcome = await service.regenerateMessage({
+      character,
+      conversationId: conversation.id,
+      messageId: selectedAssistant.id,
+      onAssistantText: vi.fn(),
+      signal: new AbortController().signal,
+    });
+    expect(outcome).toEqual({
+      status: "completed",
+      content: "Hello",
+      model: "openai/gpt-5",
+      provider: "openrouter",
+    });
+    await expect(repositories.messages.list()).resolves.toEqual([
+      preceding,
+      selectedAssistant,
+      later,
+    ]);
+    const request = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(request.messages).toEqual([
+      { role: "system", content: character.systemPrompt },
+      { role: "user", content: "Visible question" },
+    ]);
+  });
+
   it("adds bounded active-character memories only when context consent is enabled", async () => {
     const settings: AppSettings = {
       theme: "system",

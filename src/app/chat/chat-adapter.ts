@@ -25,12 +25,50 @@ export type ChatStreamOutcome =
   | Readonly<{ status: "cancelled" }>
   | Readonly<{ status: "error"; message: string }>;
 
+export type ChatRegenerationInput = Readonly<{
+  conversationId: string;
+  messageId: string;
+  character: Character;
+  signal: AbortSignal;
+  onAssistantText: (content: string) => void;
+}>;
+
+export type ChatRegenerationOutcome =
+  | Readonly<{
+      status: "completed";
+      content: string;
+      model: string;
+      provider: string;
+    }>
+  | Readonly<{ status: "cancelled" }>
+  | Readonly<{ status: "error"; message: string }>;
+
 export interface ChatAdapter {
   load(): Promise<ChatSnapshot>;
   createConversation(characterId: string): Promise<Conversation>;
   retrieveConversation(id: string): Promise<ConversationWithMessages>;
   deleteConversation(id: string): Promise<void>;
+  editUserMessage(input: {
+    conversationId: string;
+    messageId: string;
+    content: string;
+  }): Promise<void>;
+  deleteMessage(input: {
+    conversationId: string;
+    messageId: string;
+    discardFollowing: boolean;
+  }): Promise<void>;
   streamMessage(input: ChatStreamInput): Promise<ChatStreamOutcome>;
+  regenerateMessage(
+    input: ChatRegenerationInput,
+  ): Promise<ChatRegenerationOutcome>;
+  replaceAssistantMessage(input: {
+    conversationId: string;
+    messageId: string;
+    content: string;
+    model: string;
+    provider: string;
+  }): Promise<void>;
 }
 
 export class ChatAdapterError extends Error {
