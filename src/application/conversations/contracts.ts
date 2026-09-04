@@ -59,6 +59,11 @@ export type ConversationUseCaseError =
       readonly id: string;
     }
   | {
+      readonly kind: "conflict";
+      readonly code: "COHERENT_HISTORY_REQUIRED" | "MESSAGE_ACTION_NOT_ALLOWED";
+      readonly laterMessageCount: number;
+    }
+  | {
       readonly kind: "application";
       readonly code: ApplicationErrorCode;
       readonly error: ApplicationError;

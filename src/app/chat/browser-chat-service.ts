@@ -12,7 +12,9 @@ import {
 } from "@/application/memories";
 import {
   createConversationApplicationService,
+  createConversationMessageActionService,
   type ConversationApplicationService,
+  type ConversationMessageActionService,
   type ConversationUseCaseResult,
 } from "@/application/conversations";
 import { createConversationContextAssembler } from "@/application/conversations/context";
@@ -47,6 +49,8 @@ import {
 import {
   ChatAdapterError,
   type ChatAdapter,
+  type ChatRegenerationInput,
+  type ChatRegenerationOutcome,
   type ChatSnapshot,
   type ChatStreamInput,
   type ChatStreamOutcome,
@@ -197,6 +201,7 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
   readonly #characterService: CharacterApplicationService;
   readonly #personaService: PersonaApplicationService;
   readonly #conversationService: ConversationApplicationService;
+  readonly #messageActionService: ConversationMessageActionService;
   readonly #contextAssembler = createConversationContextAssembler();
   readonly #providerSettings: ProviderSettingsService;
   readonly #memorySettings: MemorySettingsService;
@@ -218,6 +223,11 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
       repositories.conversations,
       repositories.messages,
       repositories.conversationMessageDeletion,
+    );
+    this.#messageActionService = createConversationMessageActionService(
+      repositories.conversations,
+      repositories.messages,
+      repositories.conversationMessageSequence,
     );
     this.#providerSettings = new ProviderSettingsService(
       repositories.settings,
@@ -283,6 +293,31 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
       result,
       "The conversation could not be deleted.",
     );
+  }
+
+  public async editUserMessage(input: {
+    conversationId: string;
+    messageId: string;
+    content: string;
+  }): Promise<void> {
+    const result = await this.#messageActionService.editUserMessage({
+      ...input,
+      history: "discard_following",
+    });
+    unwrapConversationResult(result, "The message could not be edited.");
+  }
+
+  public async deleteMessage(input: {
+    conversationId: string;
+    messageId: string;
+    discardFollowing: boolean;
+  }): Promise<void> {
+    const result = await this.#messageActionService.deleteMessage({
+      conversationId: input.conversationId,
+      messageId: input.messageId,
+      history: input.discardFollowing ? "discard_following" : "single",
+    });
+    unwrapConversationResult(result, "The message could not be deleted.");
   }
 
   public async streamMessage(
@@ -385,6 +420,96 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
     }
   }
 
+  public async regenerateMessage(
+    input: ChatRegenerationInput,
+  ): Promise<ChatRegenerationOutcome> {
+    try {
+      const conversation = await this.retrieveConversation(
+        input.conversationId,
+      );
+      const messageIndex = conversation.messages.findIndex(
+        (message) => message.id === input.messageId,
+      );
+      const target = conversation.messages[messageIndex];
+      if (target === undefined || target.role !== "assistant") {
+        throw new ChatAdapterError(
+          "The selected message cannot be regenerated.",
+        );
+      }
+
+      const contextResult = this.#contextAssembler.assemble({
+        conversation: conversation.conversation,
+        messages: conversation.messages.slice(0, messageIndex),
+        limits: contextLimits,
+      });
+      if (!contextResult.ok) {
+        return {
+          status: "error",
+          message: "The conversation context is unavailable.",
+        };
+      }
+
+      const configuredProvider = await this.#providerForMessage();
+      const memoryContext = await this.#memoryContext(input.character.id);
+      const content = await this.#readAssistantResponse(
+        configuredProvider.provider,
+        {
+          model: configuredProvider.model,
+          messages: chatMessages(
+            input.character,
+            contextResult.data.messages,
+            memoryContext,
+          ),
+        },
+        input,
+      );
+      if (content === null) {
+        return { status: "cancelled" };
+      }
+      if (content.length === 0) {
+        return {
+          status: "error",
+          message: "The provider returned an empty response.",
+        };
+      }
+
+      return {
+        status: "completed",
+        content,
+        model: configuredProvider.model,
+        provider: configuredProvider.provider.id,
+      };
+    } catch (error: unknown) {
+      if (isCancelled(error, input.signal)) {
+        return { status: "cancelled" };
+      }
+      if (error instanceof ChatAdapterError) {
+        return { status: "error", message: error.message };
+      }
+      return {
+        status: "error",
+        message: normalizeApplicationError(error, { kind: "provider" }).message,
+      };
+    }
+  }
+
+  public async replaceAssistantMessage(input: {
+    conversationId: string;
+    messageId: string;
+    content: string;
+    model: string;
+    provider: string;
+  }): Promise<void> {
+    const result = await this.#messageActionService.replaceAssistantMessage({
+      ...input,
+      history: "discard_following",
+    });
+    unwrapConversationResult(
+      result,
+      "The regenerated response could not be saved.",
+    );
+  }
+
   async #loadProviderLabel(): Promise<string> {
     if (this.#testDouble !== undefined) {
       return "Local deterministic test provider";
@@ -452,7 +577,7 @@ export class BrowserChatService implements PersonaAwareChatAdapter {
   async #readAssistantResponse(
     provider: AiProvider,
     request: ChatRequest,
-    input: ChatStreamInput,
+    input: Pick<ChatStreamInput, "signal" | "onAssistantText">,
   ): Promise<string | null> {
     let content = "";
 

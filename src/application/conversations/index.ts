@@ -13,6 +13,16 @@ export {
   type UpdateConversationTitleInput,
 } from "./contracts";
 export {
+  createConversationMessageActionService,
+  deleteMessage,
+  editUserMessage,
+  replaceAssistantMessage,
+  type ConversationMessageActionService,
+  type DeleteMessageInput,
+  type EditUserMessageInput,
+  type ReplaceAssistantMessageInput,
+} from "./message-actions";
+export {
   appendMessage,
   createConversation,
   deleteConversation,

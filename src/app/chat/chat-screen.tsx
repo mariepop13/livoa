@@ -22,6 +22,9 @@ import {
 import ChatComposer from "./chat-composer";
 import ChatFeedback from "./chat-feedback";
 import ChatLoadingState from "./chat-loading-state";
+import ChatMessageActionDialog, {
+  type MessageActionDialogState,
+} from "./chat-message-action-dialog";
 import ChatMessageList from "./chat-message-list";
 import ChatPageHeader from "./chat-page-header";
 import ChatResponseControls from "./chat-response-controls";
@@ -92,8 +95,13 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
     useState<Conversation>();
   const [deletionError, setDeletionError] = useState<string>();
   const [isDeleting, setIsDeleting] = useState(false);
+  const [messageAction, setMessageAction] =
+    useState<MessageActionDialogState>();
+  const [messageActionError, setMessageActionError] = useState<string>();
+  const [isSavingMessageAction, setIsSavingMessageAction] = useState(false);
   const deletionDialogRef = useRef<HTMLDivElement | null>(null);
   const isDeletionPending = conversationPendingDeletion !== undefined;
+  const isMessageActionPending = messageAction !== undefined;
   const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -364,6 +372,172 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
     }
   }
 
+  function followingMessageCount(message: Message): number {
+    const index = messages.findIndex(
+      (candidate) => candidate.id === message.id,
+    );
+    return index === -1 ? 0 : messages.length - index - 1;
+  }
+
+  function requestMessageEdit(message: Message): void {
+    if (streamStatus !== "idle" || isDeleting || isDeletionPending) {
+      return;
+    }
+    setMessageActionError(undefined);
+    setMessageAction({
+      kind: "edit",
+      message,
+      content: message.content,
+      laterMessageCount: followingMessageCount(message),
+    });
+  }
+
+  function requestMessageDeletion(message: Message): void {
+    if (streamStatus !== "idle" || isDeleting || isDeletionPending) {
+      return;
+    }
+    setMessageActionError(undefined);
+    setMessageAction({
+      kind: "delete",
+      message,
+      laterMessageCount: followingMessageCount(message),
+    });
+  }
+
+  function requestRegeneration(message: Message): void {
+    if (streamStatus !== "idle" || isDeleting || isDeletionPending) {
+      return;
+    }
+    setMessageActionError(undefined);
+    setMessageAction({
+      kind: "regenerate",
+      message,
+      laterMessageCount: followingMessageCount(message),
+      stage: "confirm",
+    });
+  }
+
+  function cancelMessageAction(): void {
+    if (streamStatus !== "idle") {
+      cancelResponse();
+      return;
+    }
+    if (!isSavingMessageAction) {
+      setMessageAction(undefined);
+      setMessageActionError(undefined);
+    }
+  }
+
+  async function confirmMessageAction(): Promise<void> {
+    if (
+      activeAdapter === undefined ||
+      activeConversationId === undefined ||
+      messageAction === undefined ||
+      isSavingMessageAction
+    ) {
+      return;
+    }
+
+    setMessageActionError(undefined);
+    setScreenError(undefined);
+    setStatusMessage(undefined);
+
+    if (
+      messageAction.kind === "edit" &&
+      messageAction.content.trim().length === 0
+    ) {
+      setMessageActionError("Enter a message before saving the edit.");
+      return;
+    }
+
+    if (
+      messageAction.kind === "regenerate" &&
+      messageAction.stage === "confirm"
+    ) {
+      if (selectedCharacter === undefined) {
+        return;
+      }
+      const controller = new AbortController();
+      controllerRef.current = controller;
+      setStreamStatus("loading");
+      setMessageAction({ ...messageAction, stage: "streaming" });
+
+      try {
+        const outcome = await activeAdapter.regenerateMessage({
+          character: selectedCharacter,
+          conversationId: activeConversationId,
+          messageId: messageAction.message.id,
+          signal: controller.signal,
+          onAssistantText: () => setStreamStatus("streaming"),
+        });
+        if (outcome.status === "cancelled") {
+          setMessageAction(undefined);
+          setStatusMessage("Response cancelled.");
+        } else if (outcome.status === "error") {
+          setMessageActionError(outcome.message);
+          setMessageAction({ ...messageAction, stage: "confirm" });
+        } else {
+          setMessageAction({
+            ...messageAction,
+            stage: "review",
+            candidate: {
+              content: outcome.content,
+              model: outcome.model,
+              provider: outcome.provider,
+            },
+          });
+        }
+      } catch (error: unknown) {
+        setMessageActionError(getErrorMessage(error));
+        setMessageAction({ ...messageAction, stage: "confirm" });
+      } finally {
+        controllerRef.current = null;
+        setStreamStatus("idle");
+      }
+      return;
+    }
+
+    setIsSavingMessageAction(true);
+    try {
+      if (messageAction.kind === "edit") {
+        await activeAdapter.editUserMessage({
+          conversationId: activeConversationId,
+          messageId: messageAction.message.id,
+          content: messageAction.content,
+        });
+        await refreshConversation(activeConversationId);
+        setStatusMessage("Message edited; following history discarded.");
+      } else if (messageAction.kind === "delete") {
+        await activeAdapter.deleteMessage({
+          conversationId: activeConversationId,
+          messageId: messageAction.message.id,
+          discardFollowing: messageAction.laterMessageCount > 0,
+        });
+        await refreshConversation(activeConversationId);
+        setStatusMessage(
+          messageAction.laterMessageCount > 0
+            ? "Message and following history deleted."
+            : "Message deleted.",
+        );
+      } else if (messageAction.stage === "review") {
+        await activeAdapter.replaceAssistantMessage({
+          conversationId: activeConversationId,
+          messageId: messageAction.message.id,
+          ...messageAction.candidate,
+        });
+        await refreshConversation(activeConversationId);
+        setStatusMessage(
+          "Regenerated response saved; prior response discarded.",
+        );
+      }
+      setMessageAction(undefined);
+    } catch (error: unknown) {
+      setMessageActionError(getErrorMessage(error));
+    } finally {
+      setIsSavingMessageAction(false);
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -466,7 +640,7 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
 
         <div className="mt-8 grid items-start gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
           <ChatSetup
-            isDeletionPending={isDeletionPending}
+            isDeletionPending={isDeletionPending || isMessageActionPending}
             activeConversationId={activeConversationId}
             availableConversations={availableConversations}
             characters={snapshot.characters}
@@ -511,8 +685,17 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
 
             <ChatMessageList
               activeConversationId={activeConversationId}
+              actionsDisabled={
+                streamStatus !== "idle" ||
+                isDeleting ||
+                isDeletionPending ||
+                isMessageActionPending
+              }
               loadedConversationId={loadedConversationId}
               messages={messages}
+              onDeleteMessage={requestMessageDeletion}
+              onEditMessage={requestMessageEdit}
+              onRegenerateMessage={requestRegeneration}
               pendingUserMessage={pendingUserMessage}
               streamingText={streamingText}
             />
@@ -541,7 +724,8 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
                 selectedCharacter === undefined ||
                 streamStatus !== "idle" ||
                 isDeleting ||
-                isDeletionPending
+                isDeletionPending ||
+                isMessageActionPending
               }
               onChange={setComposerValue}
               onSubmit={handleSubmit}
@@ -555,6 +739,20 @@ export default function ChatScreen({ adapter, testDouble }: ChatScreenProps) {
           </section>
         </div>
       </div>
+      {messageAction === undefined ? null : (
+        <ChatMessageActionDialog
+          action={messageAction}
+          error={messageActionError}
+          isSaving={isSavingMessageAction}
+          onCancel={cancelMessageAction}
+          onChangeEdit={(content) =>
+            setMessageAction((current) =>
+              current?.kind === "edit" ? { ...current, content } : current,
+            )
+          }
+          onConfirm={() => void confirmMessageAction()}
+        />
+      )}
       {conversationPendingDeletion === undefined ? null : (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
           <div

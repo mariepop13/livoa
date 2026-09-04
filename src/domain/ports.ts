@@ -38,6 +38,16 @@ export interface ConversationMessageDeletionRepository {
   deleteConversationAndMessages(conversationId: string): Promise<void>;
 }
 
+export type MessageSequenceReplacement = Readonly<{
+  conversationId: Message["conversationId"];
+  deletedMessageIds: readonly Message["id"][];
+  messages: readonly Message[];
+}>;
+
+export interface ConversationMessageSequenceRepository {
+  replaceMessageSequence(input: MessageSequenceReplacement): Promise<void>;
+}
+
 export type MemoryCharacterWriteResult =
   { kind: "saved" } | { kind: "character_not_found" };
 
