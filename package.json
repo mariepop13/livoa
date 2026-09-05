@@ -1,7 +1,9 @@
 {
   "name": "livoa",
+  "description": "A local-first platform for AI character conversations using your own provider credentials.",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
